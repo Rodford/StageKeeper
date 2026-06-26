@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">StageKeeper</string>
+    <string translatable="false" name="mapbox_access_token">pk.eyJ1Ijoicm9kZm9yZDM3IiwiYSI6ImNtcWk1aGk3bDAzNnYycnB3YW9vaGhhMm0ifQ.ia5rsvhyqD1oMsNwGvZ5tQ</string>
+</resources>
