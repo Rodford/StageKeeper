@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.view.ContextThemeWrapper
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,8 +23,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -47,9 +51,10 @@ import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateOptions
 import com.mapbox.maps.plugin.viewport.viewport
 import kotlinx.coroutines.delay
 
-// Define our three app screens
+// The four main screens for the StageKeeper app
 enum class AppScreen {
     Splash,
+    Login,
     Setup,
     Map
 }
@@ -102,14 +107,17 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     // State to track which screen we are currently viewing
     var currentScreen by remember { mutableStateOf(AppScreen.Splash) }
 
-    // Global state for user's selections to pass to the Map screen
+    // Keeping these globally so the map screen knows exactly what festival and party the user picked
     var userParty by remember { mutableStateOf("Select Party") }
     var userFestival by remember { mutableStateOf("Select Festival") }
 
     // Navigation Switcher
     when (currentScreen) {
         AppScreen.Splash -> {
-            SplashScreen(onSplashComplete = { currentScreen = AppScreen.Setup })
+            SplashScreen(onSplashComplete = { currentScreen = AppScreen.Login })
+        }
+        AppScreen.Login -> {
+            LoginScreen(onLoginSuccess = { currentScreen = AppScreen.Setup })
         }
         AppScreen.Setup -> {
             SetupScreen(
@@ -118,10 +126,7 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
                 selectedFestival = userFestival,
                 onFestivalSelected = { userFestival = it },
                 onLaunchMap = { currentScreen = AppScreen.Map },
-                onResetHome = {
-                    userParty = "Select Party"
-                    userFestival = "Select Festival"
-                }
+                onLogout = { currentScreen = AppScreen.Login }
             )
         }
         AppScreen.Map -> {
@@ -131,7 +136,8 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
                 onPartyChange = { userParty = it },
                 activeFestival = userFestival,
                 onFestivalChange = { userFestival = it },
-                onNavigateHome = { currentScreen = AppScreen.Setup }
+                onNavigateHome = { currentScreen = AppScreen.Setup },
+                onLogout = { currentScreen = AppScreen.Login }
             )
         }
     }
@@ -139,29 +145,115 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
 
 @Composable
 fun SplashScreen(onSplashComplete: () -> Unit) {
-    val stageKeeperDark = Color(0xFF1E1E1E)
+    // Using true black so the square edges of my JPG logo blend in and don't look like garbage
+    val splashBackground = Color.Black
     val stageKeeperPurple = Color(0xFFA644FF)
 
     LaunchedEffect(Unit) {
-        delay(2000)
+        // Hanging on the splash screen for 2 and a half seconds so the spinner actually has time to do its thing
+        delay(2500)
         onSplashComplete()
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(stageKeeperDark),
+            .background(splashBackground),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "StageKeeper",
-                color = stageKeeperPurple,
-                fontSize = 42.sp,
-                fontWeight = FontWeight.ExtraBold
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Stretching the logo out to fill the full width of the screen
+            Image(
+                painter = painterResource(id = R.drawable.logo),
+                contentDescription = "StageKeeper Logo",
+                modifier = Modifier.fillMaxWidth(),
+                contentScale = ContentScale.FillWidth
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            CircularProgressIndicator(color = stageKeeperPurple)
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Just a fake loading spinner to make it look professional while booting up
+            CircularProgressIndicator(
+                color = stageKeeperPurple,
+                strokeWidth = 4.dp,
+                modifier = Modifier.size(48.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LoginScreen(onLoginSuccess: () -> Unit) {
+    val stageKeeperDark = Color(0xFF050505) // Deep OLED black for the main background
+    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperBlue = Color(0xFF00BFFF)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(stageKeeperDark)
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "StageKeeper",
+            color = stageKeeperPurple,
+            fontSize = 42.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = "Find your crew.",
+            color = stageKeeperBlue,
+            fontSize = 16.sp
+        )
+
+        Spacer(modifier = Modifier.height(48.dp))
+
+        OutlinedTextField(
+            value = "",
+            onValueChange = {},
+            label = { Text("Email", color = Color.LightGray) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = "",
+            onValueChange = {},
+            label = { Text("Password", color = Color.LightGray) },
+            visualTransformation = PasswordVisualTransformation(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(48.dp))
+
+        Button(
+            onClick = onLoginSuccess,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text("Login", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
     }
 }
@@ -174,9 +266,9 @@ fun SetupScreen(
     selectedFestival: String,
     onFestivalSelected: (String) -> Unit,
     onLaunchMap: () -> Unit,
-    onResetHome: () -> Unit
+    onLogout: () -> Unit
 ) {
-    val stageKeeperDark = Color(0xFF1E1E1E)
+    val stageKeeperDark = Color(0xFF050505)
     val stageKeeperPurple = Color(0xFFA644FF)
 
     var partyExpanded by remember { mutableStateOf(false) }
@@ -192,13 +284,13 @@ fun SetupScreen(
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Top Reset (Home) Button for the Setup Screen
+        // Quick global logout button just in case
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Start
+            horizontalArrangement = Arrangement.End
         ) {
-            TextButton(onClick = onResetHome) {
-                Text("Home / Reset", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            TextButton(onClick = onLogout) {
+                Text("Logout", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -218,7 +310,7 @@ fun SetupScreen(
 
         Spacer(modifier = Modifier.height(48.dp))
 
-        // 1. SELECT PARTY
+        // Dropdown 1: Picking the party/crew
         ExposedDropdownMenuBox(
             expanded = partyExpanded,
             onExpandedChange = { partyExpanded = !partyExpanded }
@@ -233,12 +325,12 @@ fun SetupScreen(
                     .menuAnchor()
                     .fillMaxWidth(),
                 colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
+                    focusedContainerColor = Color(0xFF1A1A1A),
+                    unfocusedContainerColor = Color(0xFF1A1A1A),
                     focusedBorderColor = stageKeeperPurple,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = AndroidColor.BLACK.let { Color(it) },
-                    unfocusedTextColor = AndroidColor.BLACK.let { Color(it) }
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
@@ -260,7 +352,7 @@ fun SetupScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // 2. SELECT FESTIVAL
+        // Dropdown 2: Picking the specific festival
         ExposedDropdownMenuBox(
             expanded = festivalExpanded,
             onExpandedChange = { festivalExpanded = !festivalExpanded }
@@ -275,12 +367,12 @@ fun SetupScreen(
                     .menuAnchor()
                     .fillMaxWidth(),
                 colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
+                    focusedContainerColor = Color(0xFF1A1A1A),
+                    unfocusedContainerColor = Color(0xFF1A1A1A),
                     focusedBorderColor = stageKeeperPurple,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = AndroidColor.BLACK.let { Color(it) },
-                    unfocusedTextColor = AndroidColor.BLACK.let { Color(it) }
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
@@ -325,13 +417,14 @@ fun MainMapScreen(
     onPartyChange: (String) -> Unit,
     activeFestival: String,
     onFestivalChange: (String) -> Unit,
-    onNavigateHome: () -> Unit
+    onNavigateHome: () -> Unit,
+    onLogout: () -> Unit
 ) {
     val context = LocalContext.current
     val locations by viewModel.allLocations.collectAsState()
 
     val stageKeeperPurple = Color(0xFFA644FF)
-    val stageKeeperDark = Color(0xFF1E1E1E)
+    val stageKeeperDark = Color(0xFF050505)
 
     var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) }
     val redDotBitmap = remember { createSimpleRedDot() }
@@ -387,7 +480,7 @@ fun MainMapScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(stageKeeperPurple)
+                .background(stageKeeperDark)
                 .padding(top = 48.dp, bottom = 12.dp, start = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -398,18 +491,19 @@ fun MainMapScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 TextButton(onClick = onNavigateHome) {
-                    Text("Home", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Home", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
                 }
 
                 Text(
                     text = "StageKeeper",
-                    color = Color.White,
+                    color = stageKeeperPurple,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 )
 
-                // Spacer to balance the layout against the Home button
-                Spacer(modifier = Modifier.width(64.dp))
+                TextButton(onClick = onLogout) {
+                    Text("Logout", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -429,14 +523,16 @@ fun MainMapScreen(
                         value = activeParty,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Party") },
+                        label = { Text("Party", color = Color.LightGray) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyExpanded) },
                         modifier = Modifier.menuAnchor(),
                         colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                            focusedContainerColor = Color.White,
-                            unfocusedContainerColor = Color.White,
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedBorderColor = Color.Transparent
+                            focusedContainerColor = Color(0xFF1A1A1A),
+                            unfocusedContainerColor = Color(0xFF1A1A1A),
+                            focusedBorderColor = stageKeeperPurple,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
                         ),
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
@@ -467,14 +563,16 @@ fun MainMapScreen(
                         value = activeFestival,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Festival") },
+                        label = { Text("Festival", color = Color.LightGray) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = festivalExpanded) },
                         modifier = Modifier.menuAnchor(),
                         colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                            focusedContainerColor = Color.White,
-                            unfocusedContainerColor = Color.White,
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedBorderColor = Color.Transparent
+                            focusedContainerColor = Color(0xFF1A1A1A),
+                            unfocusedContainerColor = Color(0xFF1A1A1A),
+                            focusedBorderColor = stageKeeperPurple,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
                         ),
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
