@@ -3,8 +3,10 @@ package com.example.stagekeeper
 import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import com.example.stagekeeper.data.User
+import com.example.stagekeeper.data.UserDao
 
-// Entity representing a custom map marker saved by the user
+// Blueprint for the pins I'm dropping on the map
 @Entity(tableName = "meetup_locations")
 data class MeetupLocation(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
@@ -13,9 +15,10 @@ data class MeetupLocation(
     val note: String = ""
 )
 
-// Data Access Object handling local database interactions
+// Defining my map pin database queries here
 @Dao
 interface LocationDao {
+    // Keeps the map updated in real-time using Flow
     @Query("SELECT * FROM meetup_locations")
     fun getAllLocations(): Flow<List<MeetupLocation>>
 
@@ -26,10 +29,11 @@ interface LocationDao {
     fun deleteAll()
 }
 
-// Room Database setup with destructive migration for R&D testing
-@Database(entities = [MeetupLocation::class], version = 2, exportSchema = false)
+// Room Database setup including both locations and users
+@Database(entities = [MeetupLocation::class, User::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun locationDao(): LocationDao
+    abstract fun userDao(): UserDao
 
     companion object {
         @Volatile
@@ -42,7 +46,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stagekeeper_database"
                 )
-                    // Wipes old schema data to prevent crashes during rapid development
+                    // If I change the database structure during testing, just blow it away instead of crashing
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
