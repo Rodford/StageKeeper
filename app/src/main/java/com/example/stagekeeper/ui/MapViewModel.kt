@@ -160,8 +160,25 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- USER PROFILE & AUTH LOGIC ---
-    // --- Firebase Setup ---
 
+    // Safely writes a new user to the database on a background thread
+    fun registerUser(user: User, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val authResult = auth.createUserWithEmailAndPassword(user.email.trim(), user.password).await()
+                val firebaseUser = authResult.user
+                if (firebaseUser != null) {
+                    val userProfile = user.copy(userId = firebaseUser.uid, password = "")
+                    firestore.collection("users").document(firebaseUser.uid).set(userProfile).await()
+
+                    initMeshEngine() // Wake up the engine!
+                    loadUserParties()
+
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true) }
+                } else { kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) } }
+            } catch (e: Exception) { e.printStackTrace(); kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) } }
+        }
+    }
 
     // Checks the database for matching credentials
     fun authenticateUser(email: String, pass: String, onResult: (User?) -> Unit) {
