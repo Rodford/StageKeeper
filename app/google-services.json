@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1093828442785",
+    "project_id": "stagekeeper-e7a73",
+    "storage_bucket": "stagekeeper-e7a73.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1093828442785:android:c99fd42c7ad42b08664ee0",
+        "android_client_info": {
+          "package_name": "com.example.stagekeeper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA_NlOO1c8PQdApPT6G30PL9qo1F8ooOd8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

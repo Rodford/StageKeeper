@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
+import com.example.stagekeeper.data.PartyGroup
 import com.example.stagekeeper.data.User
 import com.google.android.gms.location.LocationServices
 import com.mapbox.common.MapboxOptions
@@ -64,14 +66,7 @@ import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateOptions
 import com.mapbox.maps.plugin.viewport.viewport
 import kotlinx.coroutines.delay
 
-// The five main screens for the StageKeeper app
-enum class AppScreen {
-    Splash,
-    Login,
-    SignUp,
-    Setup,
-    Map
-}
+enum class AppScreen { Splash, Login, SignUp, Setup, Map }
 
 // Database of 100 major US music festivals with accurate venue coordinates
 val festivalLocations = mapOf(
@@ -180,38 +175,45 @@ class MainActivity : ComponentActivity() {
 
     private val mapViewModel: MapViewModel by viewModels()
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (!isGranted) {
+    // Changed: We now request an Array of permissions for Android 12+ Bluetooth requirements
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == false) {
             Toast.makeText(this, "GPS required to save locations", Toast.LENGTH_SHORT).show()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MapboxOptions.accessToken =
+            "pk.eyJ1Ijoicm9kZm9yZDM3IiwiYSI6ImNtcWk1aGk3bDAzNnYycnB3YW9vaGhhMm0ifQ.ia5rsvhyqD1oMsNwGvZ5tQ"
 
-        MapboxOptions.accessToken = "pk.eyJ1Ijoicm9kZm9yZDM3IiwiYSI6ImNtcWk1aGk3bDAzNnYycnB3YW9vaGhhMm0ifQ.ia5rsvhyqD1oMsNwGvZ5tQ"
-
-        // Request location permissions on startup
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        val requiredPermissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
+        requestPermissionsLauncher.launch(requiredPermissions.toTypedArray())
 
-        setContent {
-            StageKeeperAppNavigation(mapViewModel)
-        }
+        setContent { StageKeeperAppNavigation(mapViewModel) }
     }
 
     // Requests coordinates from hardware sensors and delegates data to the ViewModel
     @SuppressLint("MissingPermission")
-    fun grabHardwareLocationAndSave(note: String) {
+    fun grabHardwareLocationAndSave(note: String, activeParty: String) {
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         fusedLocationClient.lastLocation.addOnSuccessListener { location ->
             if (location != null) {
-                mapViewModel.saveLocationToDatabase(location.latitude, location.longitude, note)
-                Toast.makeText(this, "Location Saved to Database!", Toast.LENGTH_SHORT).show()
+                mapViewModel.saveLocationToDatabase(
+                    location.latitude,
+                    location.longitude,
+                    note,
+                    activeParty
+                )
+                Toast.makeText(this, "Pin Dropped!", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Searching for GPS signal...", Toast.LENGTH_SHORT).show()
             }
@@ -227,19 +229,13 @@ class MainActivity : ComponentActivity() {
             val tileStore = TileStore.create()
 
             val tilesetDescriptor = offlineManager.createTilesetDescriptor(
-                TilesetDescriptorOptions.Builder()
-                    .styleURI(Style.MAPBOX_STREETS)
-                    .minZoom(14)
-                    .maxZoom(17)
-                    .build()
+                TilesetDescriptorOptions.Builder().styleURI(Style.MAPBOX_STREETS).minZoom(14)
+                    .maxZoom(17).build()
             )
-
-            // Creating a rough 3-mile bounding box around the center coordinate
-            val minLat = point.latitude() - 0.05
-            val minLng = point.longitude() - 0.05
-            val maxLat = point.latitude() + 0.05
+            val minLat = point.latitude() - 0.05;
+            val minLng = point.longitude() - 0.05;
+            val maxLat = point.latitude() + 0.05;
             val maxLng = point.longitude() + 0.05
-
             val bounds = Polygon.fromLngLats(
                 listOf(
                     listOf(
@@ -254,18 +250,10 @@ class MainActivity : ComponentActivity() {
 
             tileStore.loadTileRegion(
                 "festival_cache_$festivalName",
-                TileRegionLoadOptions.Builder()
-                    .geometry(bounds)
-                    .descriptors(listOf(tilesetDescriptor))
-                    .build(),
-                { progress ->
-                    // Silent progress callback
-                },
-                { expected ->
-                    // Silent completion callback
-                }
-            )
-
+                TileRegionLoadOptions.Builder().geometry(bounds)
+                    .descriptors(listOf(tilesetDescriptor)).build(),
+                { },
+                { })
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -281,63 +269,65 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     var userParty by remember { mutableStateOf("Select Party") }
     var userFestival by remember { mutableStateOf("Select Festival") }
 
-    // Navigation Switcher
+    val availableParties by viewModel.availableParties.collectAsState()
+
     when (currentScreen) {
-        AppScreen.Splash -> {
-            SplashScreen(onSplashComplete = { currentScreen = AppScreen.Login })
-        }
-        AppScreen.Login -> {
-            LoginScreen(
-                viewModel = viewModel,
-                onLoginSuccess = { currentScreen = AppScreen.Setup },
-                onNavigateToSignUp = { currentScreen = AppScreen.SignUp }
-            )
-        }
-        AppScreen.SignUp -> {
-            SignUpScreen(
-                viewModel = viewModel,
-                onSignUpSuccess = { currentScreen = AppScreen.Login },
-                onBackToLogin = { currentScreen = AppScreen.Login }
-            )
-        }
-        AppScreen.Setup -> {
-            SetupScreen(
-                selectedParty = userParty,
-                onPartySelected = { userParty = it },
-                selectedFestival = userFestival,
-                onFestivalSelected = { userFestival = it },
-                onLaunchMap = { currentScreen = AppScreen.Map },
-                onLogout = { currentScreen = AppScreen.Login }
-            )
-        }
-        AppScreen.Map -> {
-            MainMapScreen(
-                viewModel = viewModel,
-                activeParty = userParty,
-                onPartyChange = { userParty = it },
-                activeFestival = userFestival,
-                onFestivalChange = { userFestival = it },
-                onNavigateHome = { currentScreen = AppScreen.Setup },
-                onLogout = { currentScreen = AppScreen.Login }
-            )
-        }
+        AppScreen.Splash -> SplashScreen(onSplashComplete = { currentScreen = AppScreen.Login })
+        AppScreen.Login -> LoginScreen(
+            viewModel = viewModel,
+            onLoginSuccess = { currentScreen = AppScreen.Setup },
+            onNavigateToSignUp = { currentScreen = AppScreen.SignUp })
+
+        AppScreen.SignUp -> SignUpScreen(
+            viewModel = viewModel,
+            onSignUpSuccess = { currentScreen = AppScreen.Login },
+            onBackToLogin = { currentScreen = AppScreen.Login })
+
+        AppScreen.Setup -> SetupScreen(
+            selectedParty = userParty,
+            onPartySelected = {
+                userParty = it
+                viewModel.startListeningToPartyPins(it)
+                viewModel.turnOnOfflineMesh() // CHANGED: Turn on radios when party selected!
+            },
+            selectedFestival = userFestival, onFestivalSelected = { userFestival = it },
+            availableParties = availableParties, viewModel = viewModel,
+            onLaunchMap = { currentScreen = AppScreen.Map },
+            onLogout = {
+                viewModel.turnOffOfflineMesh() // CHANGED: Kill radios on logout
+                currentScreen = AppScreen.Login
+            }
+        )
+
+        AppScreen.Map -> MainMapScreen(
+            viewModel = viewModel,
+            activeParty = userParty,
+            onPartyChange = {
+                userParty = it
+                viewModel.startListeningToPartyPins(it)
+                viewModel.turnOnOfflineMesh() // CHANGED: Turn on radios when party selected!
+            },
+            activeFestival = userFestival,
+            onFestivalChange = { userFestival = it },
+            availableParties = availableParties,
+            onNavigateHome = { currentScreen = AppScreen.Setup },
+            onLogout = {
+                viewModel.turnOffOfflineMesh() // CHANGED: Kill radios on logout
+                currentScreen = AppScreen.Login
+            }
+        )
     }
 }
 
 @Composable
 fun SplashScreen(onSplashComplete: () -> Unit) {
-    // Using true black so the square edges of my JPG logo blend in and don't look like garbage
-    val splashBackground = Color.Black
+    val splashBackground = Color.Black;
     val stageKeeperPurple = Color(0xFFA644FF)
-
-    LaunchedEffect(Unit) {
-        // Hanging on the splash screen for 2 and a half seconds so the spinner actually has time to do its thing
-        delay(2500)
-        onSplashComplete()
-    }
-
+    LaunchedEffect(Unit) { delay(2500); onSplashComplete() }
     Box(
-        modifier = Modifier.fillMaxSize().background(splashBackground),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(splashBackground),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -356,7 +346,9 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
 
             // Just a fake loading spinner to make it look professional while booting up
             CircularProgressIndicator(
-                color = stageKeeperPurple, strokeWidth = 4.dp, modifier = Modifier.size(48.dp)
+                color = stageKeeperPurple,
+                strokeWidth = 4.dp,
+                modifier = Modifier.size(48.dp)
             )
         }
     }
@@ -364,15 +356,17 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoginScreen(viewModel: MapViewModel, onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
-    val context = LocalContext.current
+fun LoginScreen(
+    viewModel: MapViewModel,
+    onLoginSuccess: () -> Unit,
+    onNavigateToSignUp: () -> Unit
+) {
+    val context = LocalContext.current;
     val focusManager = LocalFocusManager.current
-
-    val stageKeeperDark = Color(0xFF050505)
-    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperDark = Color(0xFF050505);
+    val stageKeeperPurple = Color(0xFFA644FF);
     val stageKeeperBlue = Color(0xFF00BFFF)
-
-    var email by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") };
     var password by remember { mutableStateOf("") }
 
     val attemptLogin = {
@@ -397,57 +391,73 @@ fun LoginScreen(viewModel: MapViewModel, onLoginSuccess: () -> Unit, onNavigateT
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("StageKeeper", color = stageKeeperPurple, fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Text("Find your crew.", color = stageKeeperBlue, fontSize = 16.sp)
-
-        Spacer(modifier = Modifier.height(48.dp))
-
+        Text(
+            "StageKeeper",
+            color = stageKeeperPurple,
+            fontSize = 42.sp,
+            fontWeight = FontWeight.Bold
+        ); Text(
+        "Find your crew.",
+        color = stageKeeperBlue,
+        fontSize = 16.sp
+    ); Spacer(modifier = Modifier.height(48.dp))
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
             label = { Text("Email", color = Color.LightGray) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next
+            ),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
+        ); Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
             label = { Text("Password", color = Color.LightGray) },
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
             keyboardActions = KeyboardActions(onDone = { attemptLogin() }),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(48.dp))
-
+        ); Spacer(modifier = Modifier.height(48.dp))
         Button(
             onClick = { attemptLogin() },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
             shape = RoundedCornerShape(8.dp),
             enabled = email.isNotBlank() && password.isNotBlank()
         ) {
-            Text("Login", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
+            Text(
+                "Login",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }; Spacer(modifier = Modifier.height(16.dp))
         TextButton(onClick = onNavigateToSignUp) {
-            Text("Don't have an account? Sign Up", color = stageKeeperBlue)
+            Text(
+                "Don't have an account? Sign Up",
+                color = stageKeeperBlue
+            )
         }
     }
 }
@@ -455,16 +465,15 @@ fun LoginScreen(viewModel: MapViewModel, onLoginSuccess: () -> Unit, onNavigateT
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
-    val context = LocalContext.current
-    val stageKeeperDark = Color(0xFF050505)
+    val context = LocalContext.current;
+    val stageKeeperDark = Color(0xFF050505);
     val stageKeeperPurple = Color(0xFFA644FF)
-
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var displayName by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var emergencyContact by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") };
+    var password by remember { mutableStateOf("") };
+    var username by remember { mutableStateOf("") };
+    var displayName by remember { mutableStateOf("") };
+    var phone by remember { mutableStateOf("") };
+    var emergencyContact by remember { mutableStateOf("") };
     var medicalInfo by remember { mutableStateOf("") }
 
     val scrollState = rememberScrollState()
@@ -478,102 +487,169 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-            TextButton(onClick = onBackToLogin) {
-                Text("Back to Login", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Create Account", color = stageKeeperPurple, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text("Join the party securely.", color = Color.LightGray, fontSize = 16.sp)
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Text("Required Info", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = email, onValueChange = { email = it }, label = { Text("Email") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = password, onValueChange = { password = it }, label = { Text("Password") },
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = username, onValueChange = { username = it }, label = { Text("Username") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = displayName, onValueChange = { displayName = it }, label = { Text("Display Name (e.g. BassHead99)") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Text("Safety & Festival Details (Optional)", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = phone, onValueChange = { phone = it }, label = { Text("Phone Number") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = emergencyContact, onValueChange = { emergencyContact = it }, label = { Text("Emergency Contact Number") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = medicalInfo, onValueChange = { medicalInfo = it }, label = { Text("Medical Info (e.g. Asthma, Allergies)") },
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
-        )
-
-        Spacer(modifier = Modifier.height(48.dp))
-
+            horizontalArrangement = Arrangement.Start
+        ) {
+            TextButton(onClick = onBackToLogin) {
+                Text(
+                    "Back to Login",
+                    color = stageKeeperPurple,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }; Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "Create Account",
+            color = stageKeeperPurple,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Bold
+        ); Text("Join the party securely.", color = Color.LightGray, fontSize = 16.sp); Spacer(
+        modifier = Modifier.height(32.dp)
+    )
+        Text(
+            "Required Info",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Start)
+        ); Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("Username") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = displayName,
+            onValueChange = { displayName = it },
+            label = { Text("Display Name") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(32.dp))
+        Text(
+            "Safety & Festival Details (Optional)",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Start)
+        ); Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = phone,
+            onValueChange = { phone = it },
+            label = { Text("Phone Number") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = emergencyContact,
+            onValueChange = { emergencyContact = it },
+            label = { Text("Emergency Contact Number") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = medicalInfo,
+            onValueChange = { medicalInfo = it },
+            label = { Text("Medical Info") },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple,
+                unfocusedBorderColor = Color.DarkGray
+            )
+        ); Spacer(modifier = Modifier.height(48.dp))
         Button(
             onClick = {
                 val newUser = User(
-                    email = email, password = password, username = username, displayName = displayName,
-                    phoneNumber = phone.ifBlank { null }, emergencyContact = emergencyContact.ifBlank { null },
-                    medicalInfo = medicalInfo.ifBlank { null }, partyCode = ""
+                    email = email,
+                    password = password,
+                    username = username,
+                    displayName = displayName,
+                    phoneNumber = phone.ifBlank { null },
+                    emergencyContact = emergencyContact.ifBlank { null },
+                    medicalInfo = medicalInfo.ifBlank { null },
+                    partyCode = ""
                 )
 
                 viewModel.registerUser(newUser) { success ->
                     if (success) {
-                        Toast.makeText(context, "Account Created! Please Log In.", Toast.LENGTH_LONG).show()
-                        onSignUpSuccess()
+                        Toast.makeText(
+                            context,
+                            "Account Created! Please Log In.",
+                            Toast.LENGTH_LONG
+                        ).show(); onSignUpSuccess()
                     } else {
-                        Toast.makeText(context, "Error creating account.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Error creating account.", Toast.LENGTH_SHORT)
+                            .show()
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
             shape = RoundedCornerShape(8.dp),
             enabled = email.isNotBlank() && password.isNotBlank() && username.isNotBlank() && displayName.isNotBlank()
         ) {
-            Text("Complete Sign Up", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
+            Text(
+                "Complete Sign Up",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }; Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
@@ -584,66 +660,197 @@ fun SetupScreen(
     onPartySelected: (String) -> Unit,
     selectedFestival: String,
     onFestivalSelected: (String) -> Unit,
+    availableParties: List<PartyGroup>,
+    viewModel: MapViewModel,
     onLaunchMap: () -> Unit,
     onLogout: () -> Unit
 ) {
-    val context = LocalContext.current
-    val stageKeeperDark = Color(0xFF050505)
-    val stageKeeperPurple = Color(0xFFA644FF)
-
-    var partyExpanded by remember { mutableStateOf(false) }
-    val parties = listOf("Create New Crew", "EDC Group", "Rolling Loud Party")
-
-    var festivalExpanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current;
+    val stageKeeperDark = Color(0xFF050505);
+    val stageKeeperPurple = Color(0xFFA644FF);
+    val stageKeeperBlue = Color(0xFF00BFFF)
+    var partyExpanded by remember { mutableStateOf(false) };
+    var festivalExpanded by remember { mutableStateOf(false) };
     val festivals = festivalLocations.keys.toList()
+    var showCreatePartyDialog by remember { mutableStateOf(false) };
+    var newPartyName by remember { mutableStateOf("") };
+    var showJoinPartyDialog by remember { mutableStateOf(false) };
+    var joinInviteCode by remember { mutableStateOf("") }
+
+    if (showCreatePartyDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreatePartyDialog = false },
+            title = { Text("Create New Crew") },
+            text = {
+                OutlinedTextField(
+                    value = newPartyName,
+                    onValueChange = { newPartyName = it },
+                    label = { Text("Crew Name") })
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newPartyName.isNotBlank()) {
+                            viewModel.createNewParty(newPartyName) { inviteCode ->
+                                Toast.makeText(
+                                    context,
+                                    "Crew Created!",
+                                    Toast.LENGTH_SHORT
+                                ).show(); onPartySelected(newPartyName); showCreatePartyDialog =
+                                false; newPartyName = ""
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Create", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showCreatePartyDialog = false
+                }) { Text("Cancel", color = stageKeeperPurple) }
+            })
+    }
+    if (showJoinPartyDialog) {
+        AlertDialog(
+            onDismissRequest = { showJoinPartyDialog = false },
+            title = { Text("Join a Crew") },
+            text = {
+                OutlinedTextField(
+                    value = joinInviteCode,
+                    onValueChange = { joinInviteCode = it },
+                    label = { Text("6-Digit Invite Code") })
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (joinInviteCode.isNotBlank()) {
+                            viewModel.joinParty(joinInviteCode) { success, resultMessage ->
+                                if (success) {
+                                    Toast.makeText(
+                                        context,
+                                        "Joined $resultMessage!",
+                                        Toast.LENGTH_SHORT
+                                    ).show(); onPartySelected(resultMessage); showJoinPartyDialog =
+                                        false; joinInviteCode = ""
+                                } else {
+                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT)
+                                        .show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Join", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showJoinPartyDialog = false }) {
+                    Text(
+                        "Cancel",
+                        color = stageKeeperPurple
+                    )
+                }
+            })
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(stageKeeperDark)
             .systemBarsPadding()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
             TextButton(onClick = onLogout) {
-                Text("Logout", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                Text(
+                    "Logout",
+                    color = stageKeeperPurple,
+                    fontWeight = FontWeight.Bold
+                )
             }
-        }
-
-        Spacer(modifier = Modifier.height(48.dp))
-
-        Text("StageKeeper", color = stageKeeperPurple, fontSize = 36.sp, fontWeight = FontWeight.Bold)
-        Text("Setup Your Event", color = Color.White, fontSize = 18.sp)
-
-        Spacer(modifier = Modifier.height(48.dp))
+        }; Spacer(modifier = Modifier.height(48.dp))
+        Text(
+            "StageKeeper",
+            color = stageKeeperPurple,
+            fontSize = 36.sp,
+            fontWeight = FontWeight.Bold
+        ); Text(
+        "Setup Your Event",
+        color = Color.White,
+        fontSize = 18.sp
+    ); Spacer(modifier = Modifier.height(48.dp))
 
         // Dropdown 1: Picking the party/crew
         ExposedDropdownMenuBox(
-            expanded = partyExpanded, onExpandedChange = { partyExpanded = !partyExpanded }
-        ) {
+            expanded = partyExpanded,
+            onExpandedChange = { partyExpanded = !partyExpanded }) {
             OutlinedTextField(
-                value = selectedParty, onValueChange = {}, readOnly = true,
+                value = selectedParty,
+                onValueChange = {},
+                readOnly = true,
                 label = { Text("1. Select Party", color = Color.White) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyExpanded) },
-                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                modifier = Modifier
+                    .menuAnchor()
+                    .fillMaxWidth(),
                 colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                    focusedContainerColor = Color(0xFF1A1A1A), unfocusedContainerColor = Color(0xFF1A1A1A),
-                    focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                    focusedContainerColor = Color(0xFF1A1A1A),
+                    unfocusedContainerColor = Color(0xFF1A1A1A),
+                    focusedBorderColor = stageKeeperPurple,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
-            ExposedDropdownMenu(expanded = partyExpanded, onDismissRequest = { partyExpanded = false }) {
-                parties.forEach { party ->
-                    DropdownMenuItem(
-                        text = { Text(party) },
-                        onClick = {
-                            onPartySelected(party)
-                            partyExpanded = false
-                        }
+            ExposedDropdownMenu(
+                expanded = partyExpanded,
+                onDismissRequest = { partyExpanded = false }) {
+                DropdownMenuItem(text = {
+                    Text(
+                        "🔗 Join Crew with Code",
+                        color = stageKeeperBlue,
+                        fontWeight = FontWeight.Bold
                     )
+                }, onClick = { partyExpanded = false; showJoinPartyDialog = true })
+                DropdownMenuItem(text = {
+                    Text(
+                        "➕ Create New Crew",
+                        color = stageKeeperPurple,
+                        fontWeight = FontWeight.Bold
+                    )
+                }, onClick = { partyExpanded = false; showCreatePartyDialog = true })
+                availableParties.forEach { party ->
+                    DropdownMenuItem(
+                        text = { Text(party.partyName) },
+                        onClick = { onPartySelected(party.partyName); partyExpanded = false })
                 }
+            }
+        }
+
+        val activePartyObj = availableParties.find { it.partyName == selectedParty }
+        if (activePartyObj != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Invite Code: ${activePartyObj.inviteCode}",
+                    color = stageKeeperBlue,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                TextButton(onClick = {
+                    viewModel.leaveParty(selectedParty) { success ->
+                        if (success) {
+                            onPartySelected("Select Party")
+                        }
+                    }
+                }) { Text("Leave Crew", color = Color.Red, fontSize = 14.sp) }
             }
         }
 
@@ -651,46 +858,55 @@ fun SetupScreen(
 
         // Dropdown 2: Picking the specific festival
         ExposedDropdownMenuBox(
-            expanded = festivalExpanded, onExpandedChange = { festivalExpanded = !festivalExpanded }
-        ) {
+            expanded = festivalExpanded,
+            onExpandedChange = { festivalExpanded = !festivalExpanded }) {
             OutlinedTextField(
-                value = selectedFestival, onValueChange = {}, readOnly = true,
+                value = selectedFestival,
+                onValueChange = {},
+                readOnly = true,
                 label = { Text("2. Select Festival", color = Color.White) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = festivalExpanded) },
-                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                modifier = Modifier
+                    .menuAnchor()
+                    .fillMaxWidth(),
                 colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                    focusedContainerColor = Color(0xFF1A1A1A), unfocusedContainerColor = Color(0xFF1A1A1A),
-                    focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                    focusedContainerColor = Color(0xFF1A1A1A),
+                    unfocusedContainerColor = Color(0xFF1A1A1A),
+                    focusedBorderColor = stageKeeperPurple,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
-            ExposedDropdownMenu(expanded = festivalExpanded, onDismissRequest = { festivalExpanded = false }) {
+            ExposedDropdownMenu(
+                expanded = festivalExpanded,
+                onDismissRequest = { festivalExpanded = false }) {
                 festivals.forEach { festival ->
                     DropdownMenuItem(
                         text = { Text(festival) },
                         onClick = {
-                            onFestivalSelected(festival)
-                            festivalExpanded = false
-                            (context as MainActivity).cacheFestivalMapLocally(festival)
-                            Toast.makeText(context, "Caching map for $festival...", Toast.LENGTH_SHORT).show()
-                        }
-                    )
+                            onFestivalSelected(festival); festivalExpanded =
+                            false; (context as MainActivity).cacheFestivalMapLocally(festival); Toast.makeText(
+                            context,
+                            "Caching map for $festival...",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        })
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(48.dp))
-
         Button(
             onClick = { onLaunchMap() },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
             shape = RoundedCornerShape(8.dp),
             enabled = selectedParty != "Select Party" && selectedFestival != "Select Festival"
-        ) {
-            Text("Enter Map", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        }
+        ) { Text("Enter Map", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White) }
     }
 }
 
@@ -702,30 +918,32 @@ fun MainMapScreen(
     onPartyChange: (String) -> Unit,
     activeFestival: String,
     onFestivalChange: (String) -> Unit,
+    availableParties: List<PartyGroup>,
     onNavigateHome: () -> Unit,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
     val locations by viewModel.allLocations.collectAsState()
 
-    val stageKeeperPurple = Color(0xFFA644FF)
+    val activePartyId = availableParties.find { it.partyName == activeParty }?.partyId ?: ""
+    val activePartyLocations = locations.filter { it.partyId == activePartyId }
+
+    val stageKeeperPurple = Color(0xFFA644FF);
+    val stageKeeperBlue = Color(0xFF00BFFF);
     val stageKeeperDark = Color(0xFF050505)
 
-    var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) }
-    val redDotBitmap = remember { createSimpleRedDot() }
-
-    var showNoteDialog by remember { mutableStateOf(false) }
-    var currentNoteText by remember { mutableStateOf("") }
-
-    // Dropdown states for Map Screen
-    var partyExpanded by remember { mutableStateOf(false) }
-    val parties = listOf("Create New Crew", "EDC Group", "Rolling Loud Party")
-
-    var festivalExpanded by remember { mutableStateOf(false) }
-    val festivals = festivalLocations.keys.toList()
-
-    // Tracks the last applied festival so the camera doesn't violently snap while placing pins
+    var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) };
+    val redDotBitmap = remember { createSimpleRedDot() };
     var currentRenderedFestival by remember { mutableStateOf("") }
+    var showNoteDialog by remember { mutableStateOf(false) };
+    var currentNoteText by remember { mutableStateOf("") };
+    var partyExpanded by remember { mutableStateOf(false) };
+    var festivalExpanded by remember { mutableStateOf(false) };
+    val festivals = festivalLocations.keys.toList()
+    var showCreatePartyDialog by remember { mutableStateOf(false) };
+    var newPartyName by remember { mutableStateOf("") };
+    var showJoinPartyDialog by remember { mutableStateOf(false) };
+    var joinInviteCode by remember { mutableStateOf("") }
 
     if (showNoteDialog) {
         AlertDialog(
@@ -735,31 +953,107 @@ fun MainMapScreen(
                 OutlinedTextField(
                     value = currentNoteText,
                     onValueChange = { currentNoteText = it },
-                    label = { Text("e.g., Meetup spot, Main Stage, etc.") }
-                )
+                    label = { Text("e.g., Meetup spot") })
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showNoteDialog = false; (context as MainActivity).grabHardwareLocationAndSave(
+                    currentNoteText,
+                    activeParty
+                ); currentNoteText = ""
+                }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) {
+                    Text(
+                        "Save Pin"
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNoteDialog = false }) {
+                    Text(
+                        "Cancel",
+                        color = stageKeeperPurple
+                    )
+                }
+            })
+    }
+    if (showCreatePartyDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreatePartyDialog = false },
+            title = { Text("Create New Crew") },
+            text = {
+                OutlinedTextField(
+                    value = newPartyName,
+                    onValueChange = { newPartyName = it },
+                    label = { Text("Crew Name") })
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        showNoteDialog = false
-                        (context as MainActivity).grabHardwareLocationAndSave(currentNoteText)
-                        currentNoteText = ""
+                        if (newPartyName.isNotBlank()) {
+                            viewModel.createNewParty(newPartyName) { inviteCode ->
+                                Toast.makeText(
+                                    context,
+                                    "Crew Created!",
+                                    Toast.LENGTH_SHORT
+                                ).show(); onPartyChange(newPartyName); showCreatePartyDialog =
+                                false; newPartyName = ""
+                            }
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
-                ) {
-                    Text("Save Pin")
-                }
+                ) { Text("Create", color = Color.White) }
             },
             dismissButton = {
-                TextButton(onClick = { showNoteDialog = false }) { Text("Cancel", color = stageKeeperPurple) }
-            }
-        )
+                TextButton(onClick = {
+                    showCreatePartyDialog = false
+                }) { Text("Cancel", color = stageKeeperPurple) }
+            })
+    }
+    if (showJoinPartyDialog) {
+        AlertDialog(
+            onDismissRequest = { showJoinPartyDialog = false },
+            title = { Text("Join a Crew") },
+            text = {
+                OutlinedTextField(
+                    value = joinInviteCode,
+                    onValueChange = { joinInviteCode = it },
+                    label = { Text("6-Digit Invite Code") })
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (joinInviteCode.isNotBlank()) {
+                            viewModel.joinParty(joinInviteCode) { success, resultMessage ->
+                                if (success) {
+                                    Toast.makeText(
+                                        context,
+                                        "Joined $resultMessage!",
+                                        Toast.LENGTH_SHORT
+                                    ).show(); onPartyChange(resultMessage); showJoinPartyDialog =
+                                        false; joinInviteCode = ""
+                                } else {
+                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT)
+                                        .show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Join", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showJoinPartyDialog = false }) {
+                    Text(
+                        "Cancel",
+                        color = stageKeeperPurple
+                    )
+                }
+            })
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(stageKeeperDark)
-    ) {
-        // TOP APP BAR
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .background(stageKeeperDark)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -770,64 +1064,142 @@ fun MainMapScreen(
         ) {
             // Home Button & Title Row
             Row(
-                modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                TextButton(onClick = onNavigateHome) { Text("Home", color = stageKeeperPurple, fontWeight = FontWeight.Bold) }
-                Text("StageKeeper", color = stageKeeperPurple, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = onLogout) { Text("Logout", color = stageKeeperPurple, fontWeight = FontWeight.Bold) }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Change Party Dropdown
-                ExposedDropdownMenuBox(
-                    expanded = partyExpanded, onExpandedChange = { partyExpanded = !partyExpanded }, modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = activeParty, onValueChange = {}, readOnly = true,
-                        label = { Text("Party", color = Color.LightGray) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyExpanded) },
-                        modifier = Modifier.menuAnchor(),
-                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                            focusedContainerColor = Color(0xFF1A1A1A), unfocusedContainerColor = Color(0xFF1A1A1A),
-                            focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp), singleLine = true
+                TextButton(onClick = onNavigateHome) {
+                    Text(
+                        "Home",
+                        color = stageKeeperPurple,
+                        fontWeight = FontWeight.Bold
                     )
-                    ExposedDropdownMenu(expanded = partyExpanded, onDismissRequest = { partyExpanded = false }) {
-                        parties.forEach { party ->
-                            DropdownMenuItem(text = { Text(party) }, onClick = { onPartyChange(party); partyExpanded = false })
+                }; Text(
+                "StageKeeper",
+                color = stageKeeperPurple,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            ); TextButton(onClick = onLogout) {
+                Text(
+                    "Logout",
+                    color = stageKeeperPurple,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            }; Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    ExposedDropdownMenuBox(
+                        expanded = partyExpanded,
+                        onExpandedChange = { partyExpanded = !partyExpanded }) {
+                        OutlinedTextField(
+                            value = activeParty,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Party", color = Color.LightGray) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyExpanded) },
+                            modifier = Modifier.menuAnchor(),
+                            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                                focusedContainerColor = Color(0xFF1A1A1A),
+                                unfocusedContainerColor = Color(0xFF1A1A1A),
+                                focusedBorderColor = stageKeeperPurple,
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            singleLine = true
+                        )
+                        ExposedDropdownMenu(
+                            expanded = partyExpanded,
+                            onDismissRequest = { partyExpanded = false }) {
+                            DropdownMenuItem(text = {
+                                Text(
+                                    "🔗 Join Crew with Code",
+                                    color = stageKeeperBlue,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }, onClick = { partyExpanded = false; showJoinPartyDialog = true })
+                            DropdownMenuItem(text = {
+                                Text(
+                                    "➕ Create New Crew",
+                                    color = stageKeeperPurple,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }, onClick = { partyExpanded = false; showCreatePartyDialog = true })
+                            availableParties.forEach { party ->
+                                DropdownMenuItem(
+                                    text = { Text(party.partyName) },
+                                    onClick = {
+                                        onPartyChange(party.partyName); partyExpanded = false
+                                    })
+                            }
+                        }
+                    }
+                    val activePartyObj = availableParties.find { it.partyName == activeParty }
+                    if (activePartyObj != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Code: ${activePartyObj.inviteCode}",
+                                color = stageKeeperBlue,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                            )
+                            TextButton(
+                                onClick = {
+                                    viewModel.leaveParty(activeParty) { success ->
+                                        if (success) {
+                                            onPartyChange("Select Party")
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.height(24.dp)
+                            ) { Text("Leave", color = Color.Red, fontSize = 12.sp) }
                         }
                     }
                 }
 
                 // Change Festival Dropdown
                 ExposedDropdownMenuBox(
-                    expanded = festivalExpanded, onExpandedChange = { festivalExpanded = !festivalExpanded }, modifier = Modifier.weight(1f)
+                    expanded = festivalExpanded,
+                    onExpandedChange = { festivalExpanded = !festivalExpanded },
+                    modifier = Modifier.weight(1f)
                 ) {
                     OutlinedTextField(
-                        value = activeFestival, onValueChange = {}, readOnly = true,
+                        value = activeFestival,
+                        onValueChange = {},
+                        readOnly = true,
                         label = { Text("Festival", color = Color.LightGray) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = festivalExpanded) },
                         modifier = Modifier.menuAnchor(),
                         colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                            focusedContainerColor = Color(0xFF1A1A1A), unfocusedContainerColor = Color(0xFF1A1A1A),
-                            focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                            focusedContainerColor = Color(0xFF1A1A1A),
+                            unfocusedContainerColor = Color(0xFF1A1A1A),
+                            focusedBorderColor = stageKeeperPurple,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
                         ),
-                        shape = RoundedCornerShape(8.dp), singleLine = true
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
                     )
-                    ExposedDropdownMenu(expanded = festivalExpanded, onDismissRequest = { festivalExpanded = false }) {
+                    ExposedDropdownMenu(
+                        expanded = festivalExpanded,
+                        onDismissRequest = { festivalExpanded = false }) {
                         festivals.forEach { festival ->
                             DropdownMenuItem(
                                 text = { Text(festival) },
-                                onClick = {
-                                    onFestivalChange(festival)
-                                    festivalExpanded = false
-                                }
-                            )
+                                onClick = { onFestivalChange(festival); festivalExpanded = false })
                         }
                     }
                 }
@@ -837,20 +1209,19 @@ fun MainMapScreen(
         // MAPBOX VIEW
         Box(modifier = Modifier.weight(1f)) {
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    val themedContext = ContextThemeWrapper(ctx, androidx.appcompat.R.style.Theme_AppCompat_DayNight)
-
+                    val themedContext = ContextThemeWrapper(
+                        ctx,
+                        androidx.appcompat.R.style.Theme_AppCompat_DayNight
+                    )
                     MapView(themedContext).apply {
-                        compass.enabled = false
-                        logo.enabled = false
-                        attribution.enabled = false
-
-                        mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
-                            style.addImage("red_dot", redDotBitmap)
-                        }
-
-                        annotationManager = annotations.createPointAnnotationManager()
+                        compass.enabled = false; logo.enabled = false; attribution.enabled =
+                        false; mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
+                        style.addImage(
+                            "red_dot",
+                            redDotBitmap
+                        )
+                    }; annotationManager = annotations.createPointAnnotationManager()
                     }
                 },
                 update = { view ->
@@ -861,21 +1232,15 @@ fun MainMapScreen(
 
                         if (activeFestival == "Select Festival") {
                             // Default back to following the user's physical GPS
-                            view.location.enabled = true
-                            view.viewport.transitionTo(
+                            view.location.enabled = true; view.viewport.transitionTo(
                                 view.viewport.makeFollowPuckViewportState(
                                     FollowPuckViewportStateOptions.Builder().zoom(16.0).build()
                                 )
                             )
                         } else {
-                            // A specific festival was chosen. Turn location on, but idle the viewport
-                            view.location.enabled = true
-                            view.viewport.idle()
 
-                            val targetPoint = festivalLocations[activeFestival]
-
-                            // Snap the camera to the specific festival grounds
-                            targetPoint?.let { point ->
+                            view.location.enabled =
+                                true; view.viewport.idle(); festivalLocations[activeFestival]?.let { point ->
                                 view.mapboxMap.setCamera(
                                     CameraOptions.Builder().center(point).zoom(14.5).build()
                                 )
@@ -885,19 +1250,19 @@ fun MainMapScreen(
 
                     // --- PIN RENDERING LOGIC ---
                     annotationManager?.let { manager ->
-                        manager.deleteAll()
-
-                        val optionsList = locations.map { loc ->
-                            PointAnnotationOptions()
-                                .withPoint(Point.fromLngLat(loc.longitude, loc.latitude))
-                                .withIconImage("red_dot")
-                                .withTextField(loc.note)
-                                .withTextOffset(listOf(0.0, 1.5))
-                                .withTextColor(AndroidColor.BLACK)
-                        }
-                        manager.create(optionsList)
+                        manager.deleteAll();
+                        val optionsList = activePartyLocations.map { loc ->
+                            PointAnnotationOptions().withPoint(
+                                Point.fromLngLat(
+                                    loc.longitude,
+                                    loc.latitude
+                                )
+                            ).withIconImage("red_dot").withTextField(loc.note)
+                                .withTextOffset(listOf(0.0, 1.5)).withTextColor(AndroidColor.BLACK)
+                        }; manager.create(optionsList)
                     }
-                }
+                },
+                modifier = Modifier.fillMaxSize()
             )
         }
 
@@ -907,40 +1272,35 @@ fun MainMapScreen(
                 .fillMaxWidth()
                 .background(stageKeeperDark)
                 .navigationBarsPadding()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Button(
                 onClick = { showNoteDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
                 shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White)
-            }
-
+            ) { Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White) }
             Button(
                 onClick = { viewModel.deleteAllLocations() },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 8.dp),
                 shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Clear Pins", fontWeight = FontWeight.Bold, color = Color.White)
-            }
+            ) { Text("Clear Pins", fontWeight = FontWeight.Bold, color = Color.White) }
         }
     }
 }
 
 // Graphic generator for custom Mapbox annotations
 fun createSimpleRedDot(): Bitmap {
-    val size = 40
-    val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val size = 40;
+    val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888);
     val canvas = Canvas(bitmap)
     val paint = Paint().apply {
-        color = AndroidColor.RED
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        color = AndroidColor.RED; style = Paint.Style.FILL; isAntiAlias = true
+    }; canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
     return bitmap
 }

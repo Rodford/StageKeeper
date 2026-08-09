@@ -3,15 +3,14 @@ package com.example.stagekeeper
 import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
-import com.example.stagekeeper.data.User
-import com.example.stagekeeper.data.UserDao
 
-// Blueprint for the pins I'm dropping on the map
+// Changed: Using a String for pinId so it matches Firebase, and added partyId
 @Entity(tableName = "meetup_locations")
 data class MeetupLocation(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val latitude: Double,
-    val longitude: Double,
+    @PrimaryKey val pinId: String = "",
+    val partyId: String = "",
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
     val note: String = ""
 )
 
@@ -22,18 +21,18 @@ interface LocationDao {
     @Query("SELECT * FROM meetup_locations")
     fun getAllLocations(): Flow<List<MeetupLocation>>
 
-    @Insert
+    // Changed: Replace strategy ensures when cloud syncs an existing pin, it just updates it
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertLocation(location: MeetupLocation)
 
     @Query("DELETE FROM meetup_locations")
     fun deleteAll()
 }
 
-// Room Database setup including both locations and users
-@Database(entities = [MeetupLocation::class, User::class], version = 3, exportSchema = false)
+// Bumped version to 5 to cleanly apply the new table schema!
+@Database(entities = [MeetupLocation::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun locationDao(): LocationDao
-    abstract fun userDao(): UserDao
 
     companion object {
         @Volatile
