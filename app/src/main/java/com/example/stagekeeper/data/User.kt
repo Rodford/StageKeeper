@@ -1,18 +1,14 @@
 package com.example.stagekeeper.data
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
-
-// Blueprint for user profiles so I can hold onto emails, passwords, and optional emergency info
-@Entity(tableName = "users")
+// Blueprint for user profiles, now configured for Firebase Firestore
 data class User(
-    @PrimaryKey(autoGenerate = true) val userId: Int = 0,
-    val email: String,
-    val password: String,
-    val username: String,
-    val displayName: String,
-    val phoneNumber: String?,
-    val emergencyContact: String?,
-    val medicalInfo: String?,
-    val partyCode: String
+    val userId: String = "",       // Changed to String to hold the Firebase UID
+    val email: String = "",
+    val password: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val phoneNumber: String? = null,
+    val emergencyContact: String? = null,
+    val medicalInfo: String? = null,
+    val partyCode: String = ""
 )

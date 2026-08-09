@@ -3,6 +3,8 @@ plugins {
     // Removed kotlin.android here because AGP 9 applies it automatically!
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    // ADDED: Google Services plugin required for Firebase
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -46,6 +48,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation("com.google.android.gms:play-services-nearby:19.0.0")
 
     // Room Database
     implementation(libs.room.runtime)
@@ -57,6 +60,15 @@ dependencies {
 
     // GPS Hardware Location
     implementation("com.google.android.gms:play-services-location:21.1.0")
+
+    // --- Added: FIREBASE LIBRARIES ---
+    // Import the Firebase BoM (Bill of Materials) so you don't have to specify versions for every Firebase tool
+    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
+
+    // Add the dependencies for Firebase Authentication and Firestore
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    // ---------------------------------
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
