@@ -2,6 +2,7 @@ package com.example.stagekeeper
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -666,6 +667,7 @@ fun SetupScreen(
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current;
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val stageKeeperDark = Color(0xFF050505);
     val stageKeeperPurple = Color(0xFFA644FF);
     val stageKeeperBlue = Color(0xFF00BFFF)
@@ -837,13 +839,36 @@ fun SetupScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Invite Code: ${activePartyObj.inviteCode}",
-                    color = stageKeeperBlue,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Invite Code: ${activePartyObj.inviteCode}",
+                        color = stageKeeperBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    TextButton(
+                        onClick = {
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(activePartyObj.inviteCode))
+                            Toast.makeText(context, "Code Copied!", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.padding(top = 8.dp, start = 8.dp)
+                    ) { Text("Copy", color = Color.LightGray, fontSize = 14.sp) }
+
+                    // New: Native Android Share Intent
+                    TextButton(
+                        onClick = {
+                            val sendIntent: Intent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, "Join my StageKeeper crew! Use invite code: ${activePartyObj.inviteCode}")
+                                type = "text/plain"
+                            }
+                            val shareIntent = Intent.createChooser(sendIntent, "Share Invite Code")
+                            context.startActivity(shareIntent)
+                        },
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) { Text("Share", color = Color.White, fontSize = 14.sp) }
+                }
                 TextButton(onClick = {
                     viewModel.leaveParty(selectedParty) { success ->
                         if (success) {
@@ -923,6 +948,7 @@ fun MainMapScreen(
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val locations by viewModel.allLocations.collectAsState()
 
     val activePartyId = availableParties.find { it.partyName == activeParty }?.partyId ?: ""
@@ -935,8 +961,12 @@ fun MainMapScreen(
     var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) };
     val redDotBitmap = remember { createSimpleRedDot() };
     var currentRenderedFestival by remember { mutableStateOf("") }
+
+    // Dialog States
     var showNoteDialog by remember { mutableStateOf(false) };
     var currentNoteText by remember { mutableStateOf("") };
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
+
     var partyExpanded by remember { mutableStateOf(false) };
     var festivalExpanded by remember { mutableStateOf(false) };
     val festivals = festivalLocations.keys.toList()
@@ -976,6 +1006,30 @@ fun MainMapScreen(
                 }
             })
     }
+
+    if (showClearConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            title = { Text("Clear All Pins?") },
+            text = { Text("This will remove all meetup pins for this crew. Are you sure?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmDialog = false
+                        viewModel.deleteAllLocations()
+                        Toast.makeText(context, "All pins cleared", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) { Text("Clear", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Cancel", color = stageKeeperPurple)
+                }
+            }
+        )
+    }
+
     if (showCreatePartyDialog) {
         AlertDialog(
             onDismissRequest = { showCreatePartyDialog = false },
@@ -1147,13 +1201,23 @@ fun MainMapScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Code: ${activePartyObj.inviteCode}",
-                                color = stageKeeperBlue,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Code: ${activePartyObj.inviteCode}",
+                                    color = stageKeeperBlue,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                                )
+                                TextButton(
+                                    onClick = {
+                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(activePartyObj.inviteCode))
+                                        Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    contentPadding = PaddingValues(0.dp),
+                                    modifier = Modifier.height(24.dp).padding(start = 8.dp)
+                                ) { Text("Copy", color = Color.LightGray, fontSize = 12.sp) }
+                            }
                             TextButton(
                                 onClick = {
                                     viewModel.leaveParty(activeParty) { success ->
@@ -1283,7 +1347,7 @@ fun MainMapScreen(
                 shape = RoundedCornerShape(8.dp)
             ) { Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White) }
             Button(
-                onClick = { viewModel.deleteAllLocations() },
+                onClick = { showClearConfirmDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
                 modifier = Modifier
                     .weight(1f)
