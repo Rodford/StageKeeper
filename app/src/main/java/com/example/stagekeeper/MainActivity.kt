@@ -273,7 +273,14 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     val availableParties by viewModel.availableParties.collectAsState()
 
     when (currentScreen) {
-        AppScreen.Splash -> SplashScreen(onSplashComplete = { currentScreen = AppScreen.Login })
+        AppScreen.Splash -> SplashScreen(onSplashComplete = {
+            // CHANGED: OFFLINE LOGIN CHECK
+            if (viewModel.isUserLoggedIn()) {
+                currentScreen = AppScreen.Setup
+            } else {
+                currentScreen = AppScreen.Login
+            }
+        })
         AppScreen.Login -> LoginScreen(
             viewModel = viewModel,
             onLoginSuccess = { currentScreen = AppScreen.Setup },
@@ -765,7 +772,10 @@ fun SetupScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            TextButton(onClick = onLogout) {
+            TextButton(onClick = {
+                viewModel.logoutUser() // CLEARS TOKEN LOCALLY
+                onLogout()
+            }) {
                 Text(
                     "Logout",
                     color = stageKeeperPurple,
@@ -1016,7 +1026,8 @@ fun MainMapScreen(
                 Button(
                     onClick = {
                         showClearConfirmDialog = false
-                        viewModel.deleteAllLocations()
+                        // CHANGED: Pass activeParty to the viewModel so it knows if you are the Admin
+                        viewModel.deleteAllLocations(activeParty)
                         Toast.makeText(context, "All pins cleared", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
@@ -1133,7 +1144,10 @@ fun MainMapScreen(
                 color = stageKeeperPurple,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
-            ); TextButton(onClick = onLogout) {
+            ); TextButton(onClick = {
+                viewModel.logoutUser() // CLEARS TOKEN LOCALLY
+                onLogout()
+            }) {
                 Text(
                     "Logout",
                     color = stageKeeperPurple,

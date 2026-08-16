@@ -4,8 +4,13 @@ import android.content.Context
 import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
+import com.google.gson.Gson
 
-class MeshManager(private val context: Context, private val currentUserId: String) {
+class MeshManager(
+    private val context: Context,
+    private val currentUserId: String,
+    private val onPinReceived: (MeetupLocation) -> Unit
+) {
 
     private val connectionsClient = Nearby.getConnectionsClient(context)
 
@@ -17,6 +22,8 @@ class MeshManager(private val context: Context, private val currentUserId: Strin
 
     // Tracks devices we have successfully connected to
     private val connectedEndpoints = mutableSetOf<String>()
+
+    private val gson = Gson()
 
     // --- 1. The Advertiser (Broadcasting: "I am here!") ---
 
@@ -102,17 +109,45 @@ class MeshManager(private val context: Context, private val currentUserId: Strin
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             if (payload.type == Payload.Type.BYTES) {
-                val receivedBytes = payload.asBytes()
-                val message = receivedBytes?.let { String(it) }
-                Log.d(TAG, "RECEIVED OFFLINE DATA from $endpointId: $message")
+                payload.asBytes()?.let { receivedBytes ->
+                    try {
+                        val jsonString = String(receivedBytes, Charsets.UTF_8)
+                        Log.d(TAG, "RECEIVED OFFLINE DATA from $endpointId: $jsonString")
 
-                // TODO: Next step is to parse this byte array into a MeetupLocation
-                // and shove it into the local Room database
+                        val receivedPin = gson.fromJson(jsonString, MeetupLocation::class.java)
+
+                        // Shove it into the local Room database
+                        onPinReceived(receivedPin)
+
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse offline pin data", e)
+                    }
+                }
             }
         }
 
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
             // Can be used to track loading bars for big file transfers (not needed for small pins)
+        }
+    }
+
+    // --- 5. The Data Broadcaster ---
+
+    fun broadcastPin(pin: MeetupLocation) {
+        if (connectedEndpoints.isEmpty()) {
+            Log.d(TAG, "No offline devices connected to broadcast to.")
+            return
+        }
+
+        try {
+            val jsonString = gson.toJson(pin)
+            val bytes = jsonString.toByteArray(Charsets.UTF_8)
+            val payload = Payload.fromBytes(bytes)
+
+            connectionsClient.sendPayload(connectedEndpoints.toList(), payload)
+            Log.d(TAG, "BROADCASTED offline pin to ${connectedEndpoints.size} devices!")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to broadcast pin", e)
         }
     }
 
