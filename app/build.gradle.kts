@@ -70,6 +70,9 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     // ---------------------------------
 
+    // NEW: Google Gson for JSON parsing (used in MeshManager to serialize map pins for offline transfer)
+    implementation("com.google.code.gson:gson:2.10.1")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
