@@ -2,32 +2,43 @@ package com.example.stagekeeper
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -41,7 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
+import coil.compose.AsyncImage
 import com.example.stagekeeper.data.PartyGroup
 import com.example.stagekeeper.data.User
 import com.google.android.gms.location.LocationServices
@@ -66,8 +79,9 @@ import com.mapbox.maps.plugin.logo.logo
 import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateOptions
 import com.mapbox.maps.plugin.viewport.viewport
 import kotlinx.coroutines.delay
+import java.io.File
 
-enum class AppScreen { Splash, Login, SignUp, Setup, Map }
+enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile }
 
 // Database of 100 major US music festivals with accurate venue coordinates
 val festivalLocations = mapOf(
@@ -176,7 +190,6 @@ class MainActivity : ComponentActivity() {
 
     private val mapViewModel: MapViewModel by viewModels()
 
-    // Changed: We now request an Array of permissions for Android 12+ Bluetooth requirements
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -233,9 +246,9 @@ class MainActivity : ComponentActivity() {
                 TilesetDescriptorOptions.Builder().styleURI(Style.MAPBOX_STREETS).minZoom(14)
                     .maxZoom(17).build()
             )
-            val minLat = point.latitude() - 0.05;
-            val minLng = point.longitude() - 0.05;
-            val maxLat = point.latitude() + 0.05;
+            val minLat = point.latitude() - 0.05
+            val minLng = point.longitude() - 0.05
+            val maxLat = point.latitude() + 0.05
             val maxLng = point.longitude() + 0.05
             val bounds = Polygon.fromLngLats(
                 listOf(
@@ -274,7 +287,6 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
 
     when (currentScreen) {
         AppScreen.Splash -> SplashScreen(onSplashComplete = {
-            // CHANGED: OFFLINE LOGIN CHECK
             if (viewModel.isUserLoggedIn()) {
                 currentScreen = AppScreen.Setup
             } else {
@@ -296,15 +308,12 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             onPartySelected = {
                 userParty = it
                 viewModel.startListeningToPartyPins(it)
-                viewModel.turnOnOfflineMesh() // CHANGED: Turn on radios when party selected!
+                viewModel.turnOnOfflineMesh()
             },
             selectedFestival = userFestival, onFestivalSelected = { userFestival = it },
             availableParties = availableParties, viewModel = viewModel,
             onLaunchMap = { currentScreen = AppScreen.Map },
-            onLogout = {
-                viewModel.turnOffOfflineMesh() // CHANGED: Kill radios on logout
-                currentScreen = AppScreen.Login
-            }
+            onNavigateProfile = { currentScreen = AppScreen.Profile }
         )
 
         AppScreen.Map -> MainMapScreen(
@@ -313,16 +322,19 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             onPartyChange = {
                 userParty = it
                 viewModel.startListeningToPartyPins(it)
-                viewModel.turnOnOfflineMesh() // CHANGED: Turn on radios when party selected!
+                viewModel.turnOnOfflineMesh()
             },
             activeFestival = userFestival,
             onFestivalChange = { userFestival = it },
             availableParties = availableParties,
             onNavigateHome = { currentScreen = AppScreen.Setup },
-            onLogout = {
-                viewModel.turnOffOfflineMesh() // CHANGED: Kill radios on logout
-                currentScreen = AppScreen.Login
-            }
+            onNavigateProfile = { currentScreen = AppScreen.Profile }
+        )
+
+        AppScreen.Profile -> ProfileScreen(
+            viewModel = viewModel,
+            onNavigateBack = { currentScreen = AppScreen.Setup },
+            onLogout = { currentScreen = AppScreen.Login }
         )
     }
 }
@@ -377,6 +389,8 @@ fun LoginScreen(
     var email by remember { mutableStateOf("") };
     var password by remember { mutableStateOf("") }
 
+    var showEmergencyDialog by remember { mutableStateOf(false) }
+
     val attemptLogin = {
         focusManager.clearFocus()
         if (email.isNotBlank() && password.isNotBlank()) {
@@ -388,6 +402,36 @@ fun LoginScreen(
                 }
             }
         }
+    }
+
+    if (showEmergencyDialog) {
+        val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
+        val emContact = sharedPrefs.getString("em_contact", "No contact provided.")
+        val emMedical = sharedPrefs.getString("em_medical", "No medical info provided.")
+
+        AlertDialog(
+            onDismissRequest = { showEmergencyDialog = false },
+            icon = { Icon(Icons.Default.Warning, contentDescription = "Emergency", tint = Color.Red) },
+            title = { Text("Emergency Information") },
+            text = {
+                Column {
+                    Text("Emergency Contact:", fontWeight = FontWeight.Bold, color = stageKeeperPurple)
+                    Text(emContact ?: "", color = Color.White)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Medical Info:", fontWeight = FontWeight.Bold, color = stageKeeperPurple)
+                    Text(emMedical ?: "", color = Color.White)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showEmergencyDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Close", color = Color.White) }
+            },
+            containerColor = Color(0xFF1A1A1A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
     }
 
     Column(
@@ -466,6 +510,18 @@ fun LoginScreen(
                 "Don't have an account? Sign Up",
                 color = stageKeeperBlue
             )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = { showEmergencyDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF330000)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = "Emergency", tint = Color.Red)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Emergency Info", color = Color.Red, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -671,7 +727,7 @@ fun SetupScreen(
     availableParties: List<PartyGroup>,
     viewModel: MapViewModel,
     onLaunchMap: () -> Unit,
-    onLogout: () -> Unit
+    onNavigateProfile: () -> Unit
 ) {
     val context = LocalContext.current;
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -685,6 +741,230 @@ fun SetupScreen(
     var newPartyName by remember { mutableStateOf("") };
     var showJoinPartyDialog by remember { mutableStateOf(false) };
     var joinInviteCode by remember { mutableStateOf("") }
+
+    // Dialog states for Friends system
+    var showFriendsDashboard by remember { mutableStateOf(false) }
+    var friendSearchQuery by remember { mutableStateOf("") }
+    var showInviteFriendsDialog by remember { mutableStateOf(false) }
+
+    val incomingInvites by viewModel.incomingInvites.collectAsState()
+
+    // INCOMING INVITE LISTENER DIALOG
+    if (incomingInvites.isNotEmpty()) {
+        val invite = incomingInvites.first()
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Crew Invite!", color = stageKeeperPurple, fontWeight = FontWeight.Bold) },
+            text = { Text("${invite.fromUserName} invited you to join ${invite.partyName}.", color = Color.White) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.respondToInvite(invite, true) { success ->
+                            if (success) {
+                                onPartySelected(invite.partyName)
+                                Toast.makeText(context, "Joined ${invite.partyName}!", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Accept", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.respondToInvite(invite, false) {} }) {
+                    Text("Decline", color = Color.Red)
+                }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
+    }
+
+    if (showFriendsDashboard) {
+        val friends by viewModel.friendsList.collectAsState()
+        val friendRequests by viewModel.incomingFriendRequests.collectAsState()
+        val suggestedFriends by viewModel.suggestedFriends.collectAsState() // NEW Mutual Friends
+
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showFriendsDashboard = false }) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF1A1A1A),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 600.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Friends Dashboard", color = stageKeeperPurple, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // SECTION 1: Add a Friend
+                    Text("Add New Friend", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = friendSearchQuery,
+                            onValueChange = { friendSearchQuery = it },
+                            placeholder = { Text("@username or Phone", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (friendSearchQuery.isNotBlank()) {
+                                    viewModel.sendFriendRequest(friendSearchQuery) { success, msg ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        if (success) friendSearchQuery = ""
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                        ) { Text("Send") }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // SECTION 2: Pending Requests
+                    if (friendRequests.isNotEmpty()) {
+                        Text("Pending Requests (${friendRequests.size})", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        LazyColumn(modifier = Modifier.heightIn(max = 120.dp).fillMaxWidth()) {
+                            items(friendRequests) { request ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(request.fromUserName, color = Color.White)
+                                    Row {
+                                        TextButton(onClick = { viewModel.respondToFriendRequest(request, false) }) {
+                                            Text("Decline", color = Color.Red, fontSize = 12.sp)
+                                        }
+                                        Button(
+                                            onClick = { viewModel.respondToFriendRequest(request, true) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) { Text("Accept", fontSize = 12.sp) }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    // SECTION 3: Suggested Friends (Mutuals)
+                    if (suggestedFriends.isNotEmpty()) {
+                        Text("Suggested Friends", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        LazyColumn(modifier = Modifier.heightIn(max = 120.dp).fillMaxWidth()) {
+                            items(suggestedFriends) { suggested ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(suggested.displayName, color = Color.White, fontWeight = FontWeight.Bold)
+                                        Text("@${suggested.username}", color = stageKeeperBlue, fontSize = 12.sp)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            viewModel.sendFriendRequest("@${suggested.username}") { success, msg ->
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) { Text("Add", fontSize = 12.sp, color = Color.White) }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    // SECTION 4: My Friends List
+                    Text("My Friends", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (friends.isEmpty()) {
+                        Text("No friends added yet.", color = Color.DarkGray, modifier = Modifier.padding(top = 8.dp))
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            items(friends) { friend ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(friend.displayName, color = Color.White, fontWeight = FontWeight.Bold)
+                                        Text("@${friend.username}", color = stageKeeperBlue, fontSize = 12.sp)
+                                    }
+                                    Row {
+                                        TextButton(onClick = { viewModel.removeFriend(friend.userId) }) {
+                                            Text("Remove", color = Color.LightGray, fontSize = 12.sp)
+                                        }
+                                        TextButton(onClick = { viewModel.blockUser(friend.userId) }) {
+                                            Text("Block", color = Color.Red, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { showFriendsDashboard = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                    ) { Text("Close", color = Color.White) }
+                }
+            }
+        }
+    }
+
+    if (showInviteFriendsDialog) {
+        val friends by viewModel.friendsList.collectAsState()
+
+        AlertDialog(
+            onDismissRequest = { showInviteFriendsDialog = false },
+            title = { Text("Invite to $selectedParty", color = stageKeeperPurple, fontWeight = FontWeight.Bold) },
+            text = {
+                if (friends.isEmpty()) {
+                    Text("No friends added yet. Add friends by their @username to invite them directly!", color = Color.White)
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp)) {
+                        items(friends) { friend ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(friend.displayName, color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("@${friend.username}", color = stageKeeperBlue, fontSize = 12.sp)
+                                }
+                                Button(
+                                    onClick = {
+                                        viewModel.sendPartyInvite(friend, selectedParty) { success ->
+                                            Toast.makeText(context, if (success) "Invite sent to ${friend.displayName}!" else "Failed to send invite", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Invite", fontSize = 12.sp, color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showInviteFriendsDialog = false }) {
+                    Text("Close", color = stageKeeperPurple)
+                }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
+    }
 
     if (showCreatePartyDialog) {
         AlertDialog(
@@ -770,14 +1050,15 @@ fun SetupScreen(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = {
-                viewModel.logoutUser() // CLEARS TOKEN LOCALLY
-                onLogout()
-            }) {
+            TextButton(onClick = { showFriendsDashboard = true }) {
+                Text("Friends Dashboard", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            }
+            TextButton(onClick = onNavigateProfile) {
                 Text(
-                    "Logout",
+                    "Profile",
                     color = stageKeeperPurple,
                     fontWeight = FontWeight.Bold
                 )
@@ -865,19 +1146,11 @@ fun SetupScreen(
                         modifier = Modifier.padding(top = 8.dp, start = 8.dp)
                     ) { Text("Copy", color = Color.LightGray, fontSize = 14.sp) }
 
-                    // New: Native Android Share Intent
+                    // Native Android Share Intent
                     TextButton(
-                        onClick = {
-                            val sendIntent: Intent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, "Join my StageKeeper crew! Use invite code: ${activePartyObj.inviteCode}")
-                                type = "text/plain"
-                            }
-                            val shareIntent = Intent.createChooser(sendIntent, "Share Invite Code")
-                            context.startActivity(shareIntent)
-                        },
+                        onClick = { showInviteFriendsDialog = true },
                         modifier = Modifier.padding(top = 8.dp)
-                    ) { Text("Share", color = Color.White, fontSize = 14.sp) }
+                    ) { Text("Invite", color = stageKeeperPurple, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
                 }
                 TextButton(onClick = {
                     viewModel.leaveParty(selectedParty) { success ->
@@ -955,7 +1228,7 @@ fun MainMapScreen(
     onFestivalChange: (String) -> Unit,
     availableParties: List<PartyGroup>,
     onNavigateHome: () -> Unit,
-    onLogout: () -> Unit
+    onNavigateProfile: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1026,7 +1299,7 @@ fun MainMapScreen(
                 Button(
                     onClick = {
                         showClearConfirmDialog = false
-                        // CHANGED: Pass activeParty to the viewModel so it knows if you are the Admin
+                        // Pass activeParty to the viewModel so it knows if you are the Admin
                         viewModel.deleteAllLocations(activeParty)
                         Toast.makeText(context, "All pins cleared", Toast.LENGTH_SHORT).show()
                     },
@@ -1144,12 +1417,9 @@ fun MainMapScreen(
                 color = stageKeeperPurple,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
-            ); TextButton(onClick = {
-                viewModel.logoutUser() // CLEARS TOKEN LOCALLY
-                onLogout()
-            }) {
+            ); TextButton(onClick = onNavigateProfile) {
                 Text(
-                    "Logout",
+                    "Profile",
                     color = stageKeeperPurple,
                     fontWeight = FontWeight.Bold
                 )
@@ -1372,7 +1642,232 @@ fun MainMapScreen(
     }
 }
 
-// Graphic generator for custom Mapbox annotations
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileScreen(
+    viewModel: MapViewModel,
+    onNavigateBack: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val context = LocalContext.current
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperBlue = Color(0xFF00BFFF)
+
+    val user by viewModel.currentUser.collectAsState()
+
+    var isEditing by remember { mutableStateOf(false) }
+
+    var displayName by remember(user) { mutableStateOf(user?.displayName ?: "") }
+    var phone by remember(user) { mutableStateOf(user?.phoneNumber ?: "") }
+    var emergencyContact by remember(user) { mutableStateOf(user?.emergencyContact ?: "") }
+    var medicalInfo by remember(user) { mutableStateOf(user?.medicalInfo ?: "") }
+    var photoUri by remember(user) { mutableStateOf(user?.profilePhotoUri ?: "") }
+
+    var showPhotoOptionsDialog by remember { mutableStateOf(false) }
+    var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            val permanentUri = context.copyUriToPermanentFile(uri)
+            photoUri = permanentUri.toString()
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && tempCameraUri != null) {
+            val permanentUri = context.copyUriToPermanentFile(tempCameraUri!!)
+            photoUri = permanentUri.toString()
+        }
+    }
+
+    if (showPhotoOptionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showPhotoOptionsDialog = false },
+            title = { Text("Profile Photo", color = stageKeeperPurple, fontWeight = FontWeight.Bold) },
+            text = { Text("Choose where to get your picture from.", color = Color.White) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPhotoOptionsDialog = false
+                        tempCameraUri = context.createImageFileUri()
+                        cameraLauncher.launch(tempCameraUri!!)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Take Photo", color = Color.White) }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showPhotoOptionsDialog = false
+                        imagePicker.launch("image/*")
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                ) { Text("Gallery", color = Color.White) }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(stageKeeperDark)
+            .systemBarsPadding()
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.Start
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onNavigateBack) {
+                Text("Back", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            }
+            TextButton(onClick = {
+                viewModel.logoutUser()
+                onLogout()
+            }) {
+                Text("Logout", color = Color.Red, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(Color.DarkGray)
+                    .clickable(enabled = isEditing) { showPhotoOptionsDialog = true },
+                contentAlignment = Alignment.Center
+            ) {
+                if (photoUri.isNotBlank()) {
+                    AsyncImage(
+                        model = photoUri,
+                        contentDescription = "Profile Photo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = "Placeholder",
+                        tint = Color.LightGray,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                if (isEditing) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)), contentAlignment = Alignment.Center) {
+                        Text("Edit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column {
+                Text(
+                    "Your Profile",
+                    color = stageKeeperPurple,
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("@${user?.username ?: "user"}", color = stageKeeperBlue, fontSize = 16.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        if (isEditing) {
+            Text("General Info", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = displayName, onValueChange = { displayName = it },
+                label = { Text("Display Name") }, modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = phone, onValueChange = { phone = it },
+                label = { Text("Phone Number") }, modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("Emergency & Medical (Visible on Login)", color = Color.Red, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = emergencyContact, onValueChange = { emergencyContact = it },
+                label = { Text("Emergency Contact") }, modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = medicalInfo, onValueChange = { medicalInfo = it },
+                label = { Text("Medical Info") }, modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+            Button(
+                onClick = {
+                    viewModel.updateUserProfile(displayName, phone, emergencyContact, medicalInfo, photoUri) { success ->
+                        if (success) {
+                            isEditing = false
+                            Toast.makeText(context, "Profile Updated", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Error updating profile", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+            ) { Text("Save Changes", color = Color.White, fontWeight = FontWeight.Bold) }
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Display Name", color = stageKeeperBlue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(user?.displayName ?: "N/A", color = Color.White, fontSize = 18.sp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Phone Number", color = stageKeeperBlue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(user?.phoneNumber ?: "N/A", color = Color.White, fontSize = 18.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Emergency Contact", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(user?.emergencyContact ?: "None provided", color = Color.White, fontSize = 18.sp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Medical Info", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(user?.medicalInfo ?: "None provided", color = Color.White, fontSize = 18.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+            Button(
+                onClick = { isEditing = true },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+            ) { Text("Edit Profile", color = Color.White, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
 fun createSimpleRedDot(): Bitmap {
     val size = 40;
     val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888);
@@ -1381,4 +1876,20 @@ fun createSimpleRedDot(): Bitmap {
         color = AndroidColor.RED; style = Paint.Style.FILL; isAntiAlias = true
     }; canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
     return bitmap
+}
+
+fun Context.createImageFileUri(): Uri {
+    val imagePath = File(cacheDir, "images").apply { mkdirs() }
+    val tempFile = File.createTempFile("profile_", ".jpg", imagePath)
+    return FileProvider.getUriForFile(this, "$packageName.fileprovider", tempFile)
+}
+
+fun Context.copyUriToPermanentFile(sourceUri: Uri): Uri {
+    val destinationFile = File(filesDir, "profile_${System.currentTimeMillis()}.jpg")
+    contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+        destinationFile.outputStream().use { outputStream ->
+            inputStream.copyTo(outputStream)
+        }
+    }
+    return Uri.fromFile(destinationFile)
 }

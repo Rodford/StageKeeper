@@ -10,5 +10,8 @@ data class User(
     val phoneNumber: String? = null,
     val emergencyContact: String? = null,
     val medicalInfo: String? = null,
-    val partyCode: String = ""
+    val partyCode: String = "",
+    val profilePhotoUri: String? = null,
+    val friends: List<String> = emptyList(),
+    val blockedUsers: List<String> = emptyList()
 )
