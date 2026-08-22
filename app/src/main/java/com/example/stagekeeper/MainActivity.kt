@@ -33,6 +33,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LayersClear
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +53,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
@@ -78,12 +81,20 @@ import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.maps.plugin.logo.logo
 import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateOptions
 import com.mapbox.maps.plugin.viewport.viewport
+import com.mapbox.maps.extension.style.sources.generated.imageSource
+import com.mapbox.maps.extension.style.sources.addSource
+import com.mapbox.maps.extension.style.layers.generated.rasterLayer
+import com.mapbox.maps.extension.style.layers.addLayer
+import com.mapbox.maps.extension.style.sources.getSourceAs
 import kotlinx.coroutines.delay
 import java.io.File
+import java.io.FileOutputStream
 
 enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile }
 
+/*
 // Database of 100 major US music festivals with accurate venue coordinates
+// COMMENTED OUT FOR NOW - PRESERVED FOR FUTURE EXPANSION
 val festivalLocations = mapOf(
     "Rolling Loud (FL)" to Point.fromLngLat(-81.4026, 28.5383),
     "EDC Orlando (FL)" to Point.fromLngLat(-81.4026, 28.5383),
@@ -185,6 +196,220 @@ val festivalLocations = mapOf(
     "Inkcarceration (OH)" to Point.fromLngLat(-82.5186, 40.7593),
     "Adjacent Music Festival (NJ)" to Point.fromLngLat(-74.4217, 39.3643)
 )
+*/
+
+// MAPBOX HELPER: Assembles coordinates as TOP LEFT -> TOP RIGHT -> BOTTOM RIGHT -> BOTTOM LEFT
+private fun imageQuad(
+    topLeftLng: Double, topLeftLat: Double,
+    topRightLng: Double, topRightLat: Double,
+    bottomRightLng: Double, bottomRightLat: Double,
+    bottomLeftLng: Double, bottomLeftLat: Double
+): List<List<Double>> {
+    return listOf(
+        listOf(topLeftLng, topLeftLat),
+        listOf(topRightLng, topRightLat),
+        listOf(bottomRightLng, bottomRightLat),
+        listOf(bottomLeftLng, bottomLeftLat)
+    )
+}
+
+data class FestivalData(
+    val name: String,
+    val dates: String,
+    val center: Point,
+    val imageName: String,
+    val imageCoordinates: List<List<Double>>
+)
+
+// ACTIVE DATABASE
+val upcomingFestivals = listOf(
+    // ---------------------------------------------------------
+    // ARC MUSIC FESTIVAL
+    // Union Park - Chicago, Illinois
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Arc Music Festival (IL)",
+        dates = "Sep 4 - Sep 6",
+        center = Point.fromLngLat(-87.66478, 41.88392),
+        imageName = "arc_music2026",
+        imageCoordinates = imageQuad(
+            -87.66827, 41.88564, // TOP LEFT
+            -87.66237, 41.88564, // TOP RIGHT
+            -87.66237, 41.88111, // BOTTOM RIGHT
+            -87.66827, 41.88111  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // RIOT FEST
+    // Douglass Park - Chicago, Illinois
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Riot Fest (IL)",
+        dates = "Sep 18 - Sep 20",
+        center = Point.fromLngLat(-87.6994, 41.8572),
+        imageName = "riotfest2025",
+        imageCoordinates = imageQuad(
+            -87.70355, 41.85897, // TOP LEFT
+            -87.69190, 41.85897, // TOP RIGHT
+            -87.69190, 41.85502, // BOTTOM RIGHT
+            -87.70355, 41.85502  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // EDC ORLANDO
+    // Camping World Stadium / Tinker Field - Orlando, Florida
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "EDC Orlando (FL)",
+        dates = "Nov 6 - Nov 8",
+        center = Point.fromLngLat(-81.40275, 28.53902),
+        imageName = "edcorlando2022",
+        imageCoordinates = imageQuad(
+            -81.40675, 28.54410, // TOP LEFT
+            -81.39580, 28.54410, // TOP RIGHT
+            -81.39580, 28.52900, // BOTTOM RIGHT
+            -81.40675, 28.52900  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // AUSTIN CITY LIMITS
+    // Zilker Park - Austin, Texas
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Austin City Limits (TX)",
+        dates = "Oct 2 - Oct 4",
+        center = Point.fromLngLat(-97.76661, 30.26768),
+        imageName = "austincitylimits2026",
+        imageCoordinates = imageQuad(
+            -97.78180, 30.27210, // TOP LEFT
+            -97.75520, 30.27210, // TOP RIGHT
+            -97.75520, 30.26080, // BOTTOM RIGHT
+            -97.78180, 30.26080  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // LIFE IS BEAUTIFUL
+    // Downtown Las Vegas, Nevada
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Life is Beautiful (NV)",
+        dates = "Sep 18 - Sep 20",
+        center = Point.fromLngLat(-115.13656, 36.16931),
+        imageName = "lifeisbeautiful2023",
+        imageCoordinates = imageQuad(
+            -115.140690, 36.174297, // TOP LEFT
+            -115.131017, 36.171731, // TOP RIGHT
+            -115.132436, 36.164326, // BOTTOM RIGHT
+            -115.142110, 36.166892  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // LOST LANDS
+    // Legend Valley - Thornville, Ohio
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Lost Lands (OH)",
+        dates = "Sep 25 - Sep 27",
+        center = Point.fromLngLat(-82.40407, 39.93982),
+        imageName = "lostlands2025",
+        imageCoordinates = imageQuad(
+            -82.42950, 39.95850, // TOP LEFT
+            -82.39800, 39.95850, // TOP RIGHT
+            -82.39800, 39.91970, // BOTTOM RIGHT
+            -82.42950, 39.91970  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // BURNING MAN 2026
+    // Black Rock City - Black Rock Desert, Nevada
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Burning Man (NV)",
+        dates = "Aug 30 - Sep 7",
+        center = Point.fromLngLat(-119.207871, 40.783242),
+        imageName = "burningman2026",
+        imageCoordinates = imageQuad(
+            -119.206674, 40.815992, // TOP LEFT
+            -119.164790, 40.784056, // TOP RIGHT
+            -119.209116, 40.750340, // BOTTOM RIGHT
+            -119.251000, 40.782277  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // DANCEFESTOPIA 2026
+    // Wildwood Outdoor Education Center - La Cygne, Kansas
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Dancefestopia (KS)",
+        dates = "Sep 7 - Sep 13",
+        center = Point.fromLngLat(-94.668760, 38.400500),
+        imageName = "dancefestopia2026",
+        imageCoordinates = imageQuad(
+            -94.673609, 38.405263, // TOP LEFT
+            -94.664109, 38.405263, // TOP RIGHT
+            -94.664109, 38.396858, // BOTTOM RIGHT
+            -94.673609, 38.396858  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // AFTERSHOCK 2026
+    // Discovery Park - Sacramento, California
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Aftershock (CA)",
+        dates = "Oct 8 - Oct 11",
+        center = Point.fromLngLat(-121.50741, 38.60135),
+        imageName = "aftershock2026",
+        imageCoordinates = imageQuad(
+            -121.51850, 38.60890, // TOP LEFT
+            -121.49620, 38.60890, // TOP RIGHT
+            -121.49620, 38.59320, // BOTTOM RIGHT
+            -121.51850, 38.59320  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // ELECTRIC ZOO
+    // Randall's Island Park - New York, New York
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Electric Zoo (NY)",
+        dates = "Sep 4 - Sep 6",
+        center = Point.fromLngLat(-73.92178, 40.79387),
+        imageName = "electriczoo2016",
+        imageCoordinates = imageQuad(
+            -73.93320, 40.79860, // TOP LEFT
+            -73.91620, 40.79860, // TOP RIGHT
+            -73.91620, 40.78820, // BOTTOM RIGHT
+            -73.93320, 40.78820  // BOTTOM LEFT
+        )
+    ),
+
+    // ---------------------------------------------------------
+    // LOUDER THAN LIFE 2026
+    // Kentucky Exposition Center - Louisville, Kentucky
+    // ---------------------------------------------------------
+    FestivalData(
+        name = "Louder Than Life (KY)",
+        dates = "Sep 24 - Sep 27",
+        center = Point.fromLngLat(-85.74218, 38.20007),
+        imageName = "louderthanlife2026",
+        imageCoordinates = imageQuad(
+            -85.75020, 38.20600, // TOP LEFT
+            -85.73420, 38.20600, // TOP RIGHT
+            -85.73420, 38.19480, // BOTTOM RIGHT
+            -85.75020, 38.19480  // BOTTOM LEFT
+        )
+    )
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -236,7 +461,7 @@ class MainActivity : ComponentActivity() {
 
     // Kicks off a silent background download for a specific festival area
     fun cacheFestivalMapLocally(festivalName: String) {
-        val point = festivalLocations[festivalName] ?: return
+        val point = upcomingFestivals.find { it.name == festivalName }?.center ?: return
 
         try {
             val offlineManager = OfflineManager()
@@ -341,7 +566,7 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
 
 @Composable
 fun SplashScreen(onSplashComplete: () -> Unit) {
-    val splashBackground = Color.Black;
+    val splashBackground = Color.Black
     val stageKeeperPurple = Color(0xFFA644FF)
     LaunchedEffect(Unit) { delay(2500); onSplashComplete() }
     Box(
@@ -381,12 +606,12 @@ fun LoginScreen(
     onLoginSuccess: () -> Unit,
     onNavigateToSignUp: () -> Unit
 ) {
-    val context = LocalContext.current;
+    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    val stageKeeperDark = Color(0xFF050505);
-    val stageKeeperPurple = Color(0xFFA644FF);
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
     val stageKeeperBlue = Color(0xFF00BFFF)
-    var email by remember { mutableStateOf("") };
+    var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
     var showEmergencyDialog by remember { mutableStateOf(false) }
@@ -448,11 +673,13 @@ fun LoginScreen(
             color = stageKeeperPurple,
             fontSize = 42.sp,
             fontWeight = FontWeight.Bold
-        ); Text(
-        "Find your crew.",
-        color = stageKeeperBlue,
-        fontSize = 16.sp
-    ); Spacer(modifier = Modifier.height(48.dp))
+        )
+        Text(
+            "Find your crew.",
+            color = stageKeeperBlue,
+            fontSize = 16.sp
+        )
+        Spacer(modifier = Modifier.height(48.dp))
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
@@ -469,7 +696,8 @@ fun LoginScreen(
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
-        ); Spacer(modifier = Modifier.height(16.dp))
+        )
+        Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
@@ -488,7 +716,8 @@ fun LoginScreen(
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
-        ); Spacer(modifier = Modifier.height(48.dp))
+        )
+        Spacer(modifier = Modifier.height(48.dp))
         Button(
             onClick = { attemptLogin() },
             modifier = Modifier
@@ -504,7 +733,8 @@ fun LoginScreen(
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
-        }; Spacer(modifier = Modifier.height(16.dp))
+        }
+        Spacer(modifier = Modifier.height(16.dp))
         TextButton(onClick = onNavigateToSignUp) {
             Text(
                 "Don't have an account? Sign Up",
@@ -529,15 +759,15 @@ fun LoginScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
-    val context = LocalContext.current;
-    val stageKeeperDark = Color(0xFF050505);
+    val context = LocalContext.current
+    val stageKeeperDark = Color(0xFF050505)
     val stageKeeperPurple = Color(0xFFA644FF)
-    var email by remember { mutableStateOf("") };
-    var password by remember { mutableStateOf("") };
-    var username by remember { mutableStateOf("") };
-    var displayName by remember { mutableStateOf("") };
-    var phone by remember { mutableStateOf("") };
-    var emergencyContact by remember { mutableStateOf("") };
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var displayName by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var emergencyContact by remember { mutableStateOf("") }
     var medicalInfo by remember { mutableStateOf("") }
 
     val scrollState = rememberScrollState()
@@ -562,21 +792,23 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                     fontWeight = FontWeight.Bold
                 )
             }
-        }; Spacer(modifier = Modifier.height(16.dp))
+        }
+        Spacer(modifier = Modifier.height(16.dp))
         Text(
             "Create Account",
             color = stageKeeperPurple,
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold
-        ); Text("Join the party securely.", color = Color.LightGray, fontSize = 16.sp); Spacer(
-        modifier = Modifier.height(32.dp)
-    )
+        )
+        Text("Join the party securely.", color = Color.LightGray, fontSize = 16.sp)
+        Spacer(modifier = Modifier.height(32.dp))
         Text(
             "Required Info",
             color = Color.White,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.align(Alignment.Start)
-        ); Spacer(modifier = Modifier.height(8.dp))
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
@@ -589,7 +821,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(12.dp))
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
@@ -603,7 +836,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(12.dp))
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
@@ -616,7 +850,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(12.dp))
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = displayName,
             onValueChange = { displayName = it },
@@ -629,13 +864,15 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(32.dp))
+        )
+        Spacer(modifier = Modifier.height(32.dp))
         Text(
             "Safety & Festival Details (Optional)",
             color = Color.White,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.align(Alignment.Start)
-        ); Spacer(modifier = Modifier.height(8.dp))
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = phone,
             onValueChange = { phone = it },
@@ -648,7 +885,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(12.dp))
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = emergencyContact,
             onValueChange = { emergencyContact = it },
@@ -661,7 +899,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(12.dp))
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = medicalInfo,
             onValueChange = { medicalInfo = it },
@@ -673,7 +912,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 focusedBorderColor = stageKeeperPurple,
                 unfocusedBorderColor = Color.DarkGray
             )
-        ); Spacer(modifier = Modifier.height(48.dp))
+        )
+        Spacer(modifier = Modifier.height(48.dp))
         Button(
             onClick = {
                 val newUser = User(
@@ -693,10 +933,10 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                             context,
                             "Account Created! Please Log In.",
                             Toast.LENGTH_LONG
-                        ).show(); onSignUpSuccess()
+                        ).show()
+                        onSignUpSuccess()
                     } else {
-                        Toast.makeText(context, "Error creating account.", Toast.LENGTH_SHORT)
-                            .show()
+                        Toast.makeText(context, "Error creating account.", Toast.LENGTH_SHORT).show()
                     }
                 }
             },
@@ -713,7 +953,8 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
-        }; Spacer(modifier = Modifier.height(32.dp))
+        }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
@@ -729,17 +970,16 @@ fun SetupScreen(
     onLaunchMap: () -> Unit,
     onNavigateProfile: () -> Unit
 ) {
-    val context = LocalContext.current;
+    val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-    val stageKeeperDark = Color(0xFF050505);
-    val stageKeeperPurple = Color(0xFFA644FF);
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
     val stageKeeperBlue = Color(0xFF00BFFF)
-    var partyExpanded by remember { mutableStateOf(false) };
-    var festivalExpanded by remember { mutableStateOf(false) };
-    val festivals = festivalLocations.keys.toList()
-    var showCreatePartyDialog by remember { mutableStateOf(false) };
-    var newPartyName by remember { mutableStateOf("") };
-    var showJoinPartyDialog by remember { mutableStateOf(false) };
+    var partyExpanded by remember { mutableStateOf(false) }
+    var festivalExpanded by remember { mutableStateOf(false) }
+    var showCreatePartyDialog by remember { mutableStateOf(false) }
+    var newPartyName by remember { mutableStateOf("") }
+    var showJoinPartyDialog by remember { mutableStateOf(false) }
     var joinInviteCode by remember { mutableStateOf("") }
 
     // Dialog states for Friends system
@@ -781,9 +1021,9 @@ fun SetupScreen(
     if (showFriendsDashboard) {
         val friends by viewModel.friendsList.collectAsState()
         val friendRequests by viewModel.incomingFriendRequests.collectAsState()
-        val suggestedFriends by viewModel.suggestedFriends.collectAsState() // NEW Mutual Friends
+        val suggestedFriends by viewModel.suggestedFriends.collectAsState()
 
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showFriendsDashboard = false }) {
+        Dialog(onDismissRequest = { showFriendsDashboard = false }) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = Color(0xFF1A1A1A),
@@ -985,8 +1225,10 @@ fun SetupScreen(
                                     context,
                                     "Crew Created!",
                                     Toast.LENGTH_SHORT
-                                ).show(); onPartySelected(newPartyName); showCreatePartyDialog =
-                                false; newPartyName = ""
+                                ).show()
+                                onPartySelected(newPartyName)
+                                showCreatePartyDialog = false
+                                newPartyName = ""
                             }
                         }
                     },
@@ -1019,11 +1261,12 @@ fun SetupScreen(
                                         context,
                                         "Joined $resultMessage!",
                                         Toast.LENGTH_SHORT
-                                    ).show(); onPartySelected(resultMessage); showJoinPartyDialog =
-                                        false; joinInviteCode = ""
+                                    ).show()
+                                    onPartySelected(resultMessage)
+                                    showJoinPartyDialog = false
+                                    joinInviteCode = ""
                                 } else {
-                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT)
-                                        .show()
+                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -1063,17 +1306,20 @@ fun SetupScreen(
                     fontWeight = FontWeight.Bold
                 )
             }
-        }; Spacer(modifier = Modifier.height(48.dp))
+        }
+        Spacer(modifier = Modifier.height(48.dp))
         Text(
             "StageKeeper",
             color = stageKeeperPurple,
             fontSize = 36.sp,
             fontWeight = FontWeight.Bold
-        ); Text(
-        "Setup Your Event",
-        color = Color.White,
-        fontSize = 18.sp
-    ); Spacer(modifier = Modifier.height(48.dp))
+        )
+        Text(
+            "Setup Your Event",
+            color = Color.White,
+            fontSize = 18.sp
+        )
+        Spacer(modifier = Modifier.height(48.dp))
 
         // Dropdown 1: Picking the party/crew
         ExposedDropdownMenuBox(
@@ -1100,7 +1346,9 @@ fun SetupScreen(
             )
             ExposedDropdownMenu(
                 expanded = partyExpanded,
-                onDismissRequest = { partyExpanded = false }) {
+                onDismissRequest = { partyExpanded = false },
+                modifier = Modifier.background(Color(0xFF1A1A1A))
+            ) {
                 DropdownMenuItem(text = {
                     Text(
                         "🔗 Join Crew with Code",
@@ -1117,7 +1365,7 @@ fun SetupScreen(
                 }, onClick = { partyExpanded = false; showCreatePartyDialog = true })
                 availableParties.forEach { party ->
                     DropdownMenuItem(
-                        text = { Text(party.partyName) },
+                        text = { Text(party.partyName, color = Color.White) },
                         onClick = { onPartySelected(party.partyName); partyExpanded = false })
                 }
             }
@@ -1189,17 +1437,26 @@ fun SetupScreen(
             )
             ExposedDropdownMenu(
                 expanded = festivalExpanded,
-                onDismissRequest = { festivalExpanded = false }) {
-                festivals.forEach { festival ->
+                onDismissRequest = { festivalExpanded = false },
+                modifier = Modifier.background(Color(0xFF1A1A1A))
+            ) {
+                upcomingFestivals.forEach { festivalData ->
                     DropdownMenuItem(
-                        text = { Text(festival) },
+                        text = {
+                            Column {
+                                Text(festivalData.name, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text(festivalData.dates, color = stageKeeperBlue, fontSize = 12.sp)
+                            }
+                        },
                         onClick = {
-                            onFestivalSelected(festival); festivalExpanded =
-                            false; (context as MainActivity).cacheFestivalMapLocally(festival); Toast.makeText(
-                            context,
-                            "Caching map for $festival...",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                            onFestivalSelected(festivalData.name)
+                            festivalExpanded = false
+                            (context as MainActivity).cacheFestivalMapLocally(festivalData.name)
+                            Toast.makeText(
+                                context,
+                                "Caching map for ${festivalData.name}...",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         })
                 }
             }
@@ -1237,26 +1494,30 @@ fun MainMapScreen(
     val activePartyId = availableParties.find { it.partyName == activeParty }?.partyId ?: ""
     val activePartyLocations = locations.filter { it.partyId == activePartyId }
 
-    val stageKeeperPurple = Color(0xFFA644FF);
-    val stageKeeperBlue = Color(0xFF00BFFF);
+    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperBlue = Color(0xFF00BFFF)
     val stageKeeperDark = Color(0xFF050505)
 
-    var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) };
-    val redDotBitmap = remember { createSimpleRedDot() };
-    var currentRenderedFestival by remember { mutableStateOf("") }
+    var annotationManager by remember { mutableStateOf<PointAnnotationManager?>(null) }
+    val redDotBitmap = remember { createSimpleRedDot() }
 
-    // Dialog States
-    var showNoteDialog by remember { mutableStateOf(false) };
-    var currentNoteText by remember { mutableStateOf("") };
+    // State to track changes
+    var currentRenderedFestival by remember { mutableStateOf("") }
+    var currentOverlayState by remember { mutableStateOf(true) }
+
+    var showNoteDialog by remember { mutableStateOf(false) }
+    var currentNoteText by remember { mutableStateOf("") }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
 
-    var partyExpanded by remember { mutableStateOf(false) };
-    var festivalExpanded by remember { mutableStateOf(false) };
-    val festivals = festivalLocations.keys.toList()
-    var showCreatePartyDialog by remember { mutableStateOf(false) };
-    var newPartyName by remember { mutableStateOf("") };
-    var showJoinPartyDialog by remember { mutableStateOf(false) };
+    var partyExpanded by remember { mutableStateOf(false) }
+    var festivalExpanded by remember { mutableStateOf(false) }
+    var showCreatePartyDialog by remember { mutableStateOf(false) }
+    var newPartyName by remember { mutableStateOf("") }
+    var showJoinPartyDialog by remember { mutableStateOf(false) }
     var joinInviteCode by remember { mutableStateOf("") }
+
+    // Toggle for the map overlay
+    var showMapOverlay by remember { mutableStateOf(true) }
 
     if (showNoteDialog) {
         AlertDialog(
@@ -1270,22 +1531,19 @@ fun MainMapScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    showNoteDialog = false; (context as MainActivity).grabHardwareLocationAndSave(
-                    currentNoteText,
-                    activeParty
-                ); currentNoteText = ""
-                }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) {
-                    Text(
-                        "Save Pin"
+                    showNoteDialog = false
+                    (context as MainActivity).grabHardwareLocationAndSave(
+                        currentNoteText,
+                        activeParty
                     )
+                    currentNoteText = ""
+                }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) {
+                    Text("Save Pin")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showNoteDialog = false }) {
-                    Text(
-                        "Cancel",
-                        color = stageKeeperPurple
-                    )
+                    Text("Cancel", color = stageKeeperPurple)
                 }
             })
     }
@@ -1333,8 +1591,10 @@ fun MainMapScreen(
                                     context,
                                     "Crew Created!",
                                     Toast.LENGTH_SHORT
-                                ).show(); onPartyChange(newPartyName); showCreatePartyDialog =
-                                false; newPartyName = ""
+                                ).show()
+                                onPartyChange(newPartyName)
+                                showCreatePartyDialog = false
+                                newPartyName = ""
                             }
                         }
                     },
@@ -1367,11 +1627,12 @@ fun MainMapScreen(
                                         context,
                                         "Joined $resultMessage!",
                                         Toast.LENGTH_SHORT
-                                    ).show(); onPartyChange(resultMessage); showJoinPartyDialog =
-                                        false; joinInviteCode = ""
+                                    ).show()
+                                    onPartyChange(resultMessage)
+                                    showJoinPartyDialog = false
+                                    joinInviteCode = ""
                                 } else {
-                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT)
-                                        .show()
+                                    Toast.makeText(context, resultMessage, Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -1412,19 +1673,22 @@ fun MainMapScreen(
                         color = stageKeeperPurple,
                         fontWeight = FontWeight.Bold
                     )
-                }; Text(
-                "StageKeeper",
-                color = stageKeeperPurple,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
-            ); TextButton(onClick = onNavigateProfile) {
+                }
                 Text(
-                    "Profile",
+                    "StageKeeper",
                     color = stageKeeperPurple,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 )
+                TextButton(onClick = onNavigateProfile) {
+                    Text(
+                        "Profile",
+                        color = stageKeeperPurple,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
-            }; Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1454,7 +1718,9 @@ fun MainMapScreen(
                         )
                         ExposedDropdownMenu(
                             expanded = partyExpanded,
-                            onDismissRequest = { partyExpanded = false }) {
+                            onDismissRequest = { partyExpanded = false },
+                            modifier = Modifier.background(Color(0xFF1A1A1A))
+                        ) {
                             DropdownMenuItem(text = {
                                 Text(
                                     "🔗 Join Crew with Code",
@@ -1471,9 +1737,10 @@ fun MainMapScreen(
                             }, onClick = { partyExpanded = false; showCreatePartyDialog = true })
                             availableParties.forEach { party ->
                                 DropdownMenuItem(
-                                    text = { Text(party.partyName) },
+                                    text = { Text(party.partyName, color = Color.White) },
                                     onClick = {
-                                        onPartyChange(party.partyName); partyExpanded = false
+                                        onPartyChange(party.partyName)
+                                        partyExpanded = false
                                     })
                             }
                         }
@@ -1543,11 +1810,18 @@ fun MainMapScreen(
                     )
                     ExposedDropdownMenu(
                         expanded = festivalExpanded,
-                        onDismissRequest = { festivalExpanded = false }) {
-                        festivals.forEach { festival ->
+                        onDismissRequest = { festivalExpanded = false },
+                        modifier = Modifier.background(Color(0xFF1A1A1A))
+                    ) {
+                        upcomingFestivals.forEach { festivalData ->
                             DropdownMenuItem(
-                                text = { Text(festival) },
-                                onClick = { onFestivalChange(festival); festivalExpanded = false })
+                                text = {
+                                    Column {
+                                        Text(festivalData.name, color = Color.White, fontWeight = FontWeight.Bold)
+                                        Text(festivalData.dates, color = stageKeeperBlue, fontSize = 12.sp)
+                                    }
+                                },
+                                onClick = { onFestivalChange(festivalData.name); festivalExpanded = false })
                         }
                     }
                 }
@@ -1563,43 +1837,98 @@ fun MainMapScreen(
                         androidx.appcompat.R.style.Theme_AppCompat_DayNight
                     )
                     MapView(themedContext).apply {
-                        compass.enabled = false; logo.enabled = false; attribution.enabled =
-                        false; mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
-                        style.addImage(
-                            "red_dot",
-                            redDotBitmap
-                        )
-                    }; annotationManager = annotations.createPointAnnotationManager()
+                        compass.enabled = false
+                        logo.enabled = false
+                        attribution.enabled = false
+                        mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
+                            style.addImage("red_dot", redDotBitmap)
+                        }
+                        annotationManager = annotations.createPointAnnotationManager()
                     }
                 },
                 update = { view ->
+                    val activeFest = activeFestival
+                    val overlayVisible = showMapOverlay
+                    val currentLocs = activePartyLocations
 
-                    // --- CAMERA & FESTIVAL LOGIC ---
-                    if (currentRenderedFestival != activeFestival) {
-                        currentRenderedFestival = activeFestival
+                    val festivalChanged = currentRenderedFestival != activeFest
+                    val overlayChanged = currentOverlayState != overlayVisible
 
-                        if (activeFestival == "Select Festival") {
-                            // Default back to following the user's physical GPS
-                            view.location.enabled = true; view.viewport.transitionTo(
-                                view.viewport.makeFollowPuckViewportState(
-                                    FollowPuckViewportStateOptions.Builder().zoom(16.0).build()
+                    if (festivalChanged || overlayChanged) {
+                        currentRenderedFestival = activeFest
+                        currentOverlayState = overlayVisible
+
+                        if (activeFest == "Select Festival") {
+                            if (festivalChanged) {
+                                view.location.enabled = true
+                                view.viewport.transitionTo(
+                                    view.viewport.makeFollowPuckViewportState(
+                                        FollowPuckViewportStateOptions.Builder().zoom(16.0).build()
+                                    )
                                 )
-                            )
+                            }
+                            // Remove overlay if returning to default
+                            view.mapboxMap.getStyle { mapStyle ->
+                                if (mapStyle.styleLayerExists("festival-overlay-layer")) mapStyle.removeStyleLayer("festival-overlay-layer")
+                                if (mapStyle.styleSourceExists("festival-overlay-source")) mapStyle.removeStyleSource("festival-overlay-source")
+                            }
                         } else {
+                            view.location.enabled = true
+                            view.viewport.idle()
 
-                            view.location.enabled =
-                                true; view.viewport.idle(); festivalLocations[activeFestival]?.let { point ->
-                                view.mapboxMap.setCamera(
-                                    CameraOptions.Builder().center(point).zoom(14.5).build()
-                                )
+                            val festivalObj = upcomingFestivals.find { it.name == activeFest }
+
+                            // ONLY reposition camera if the festival itself actually changed
+                            if (festivalChanged) {
+                                festivalObj?.center?.let { point ->
+                                    view.mapboxMap.setCamera(
+                                        CameraOptions.Builder().center(point).zoom(14.5).build()
+                                    )
+                                }
+                            }
+
+                            view.mapboxMap.getStyle { mapStyle ->
+                                // Remove old layers to avoid ID clashes
+                                if (mapStyle.styleLayerExists("festival-overlay-layer")) mapStyle.removeStyleLayer("festival-overlay-layer")
+                                if (mapStyle.styleSourceExists("festival-overlay-source")) mapStyle.removeStyleSource("festival-overlay-source")
+
+                                // Only add the overlay if the user has the toggle turned ON
+                                if (overlayVisible && festivalObj != null) {
+                                    val resId = context.resources.getIdentifier(festivalObj.imageName, "drawable", context.packageName)
+
+                                    if (resId != 0) {
+                                        val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, resId)
+                                        val tempFile = File(context.cacheDir, "${festivalObj.imageName}.jpg")
+
+                                        if (!tempFile.exists() && bitmap != null) {
+                                            FileOutputStream(tempFile).use { out ->
+                                                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+                                            }
+                                        }
+
+                                        // Apply exact imageQuad corners for georeferencing using the local file URL
+                                        mapStyle.addSource(
+                                            imageSource("festival-overlay-source") {
+                                                coordinates(festivalObj.imageCoordinates)
+                                                url("file://${tempFile.absolutePath}")
+                                            }
+                                        )
+                                        mapStyle.addLayer(
+                                            rasterLayer("festival-overlay-layer", "festival-overlay-source") {
+                                                rasterOpacity(0.90) // 90% transparency
+                                            }
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "Could not find image for $activeFest", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // --- PIN RENDERING LOGIC ---
                     annotationManager?.let { manager ->
-                        manager.deleteAll();
-                        val optionsList = activePartyLocations.map { loc ->
+                        manager.deleteAll()
+                        val optionsList = currentLocs.map { loc ->
                             PointAnnotationOptions().withPoint(
                                 Point.fromLngLat(
                                     loc.longitude,
@@ -1607,11 +1936,33 @@ fun MainMapScreen(
                                 )
                             ).withIconImage("red_dot").withTextField(loc.note)
                                 .withTextOffset(listOf(0.0, 1.5)).withTextColor(AndroidColor.BLACK)
-                        }; manager.create(optionsList)
+                        }
+                        manager.create(optionsList)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // FLOATING BUTTON: Toggle Map Overlay
+            if (activeFestival != "Select Festival") {
+                FloatingActionButton(
+                    onClick = { showMapOverlay = !showMapOverlay },
+                    containerColor = if (showMapOverlay) stageKeeperPurple else Color.DarkGray,
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                ) {
+                    Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (showMapOverlay) Icons.Default.Layers else Icons.Default.LayersClear,
+                            contentDescription = "Toggle Overlay"
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (showMapOverlay) "Hide Map" else "Show Map", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         // BOTTOM ACTION BUTTONS
@@ -1869,12 +2220,13 @@ fun ProfileScreen(
 }
 
 fun createSimpleRedDot(): Bitmap {
-    val size = 40;
-    val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    val size = 40
+    val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint().apply {
         color = AndroidColor.RED; style = Paint.Style.FILL; isAntiAlias = true
-    }; canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+    }
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
     return bitmap
 }
 
