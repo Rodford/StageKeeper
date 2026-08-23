@@ -25,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -90,7 +91,7 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
 
-enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile }
+enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat }
 
 /*
 // Database of 100 major US music festivals with accurate venue coordinates
@@ -224,8 +225,7 @@ data class FestivalData(
 // ACTIVE DATABASE
 val upcomingFestivals = listOf(
     // ---------------------------------------------------------
-    // ARC MUSIC FESTIVAL
-    // Union Park - Chicago, Illinois
+    // Arc Music Festival
     // ---------------------------------------------------------
     FestivalData(
         name = "Arc Music Festival (IL)",
@@ -233,10 +233,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-87.66478, 41.88392),
         imageName = "arc_music2026",
         imageCoordinates = imageQuad(
-            -87.66827, 41.88564, // TOP LEFT
-            -87.66237, 41.88564, // TOP RIGHT
-            -87.66237, 41.88111, // BOTTOM RIGHT
-            -87.66827, 41.88111  // BOTTOM LEFT
+            -87.66838, 41.88557, // TOP LEFT
+            -87.66219, 41.88557, // TOP RIGHT
+            -87.66219, 41.88118, // BOTTOM RIGHT
+            -87.66838, 41.88118  // BOTTOM LEFT
         )
     ),
 
@@ -250,10 +250,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-87.6994, 41.8572),
         imageName = "riotfest2025",
         imageCoordinates = imageQuad(
-            -87.70355, 41.85897, // TOP LEFT
-            -87.69190, 41.85897, // TOP RIGHT
-            -87.69190, 41.85502, // BOTTOM RIGHT
-            -87.70355, 41.85502  // BOTTOM LEFT
+            -87.70340, 41.86125, // TOP LEFT
+            -87.69175, 41.86125, // TOP RIGHT
+            -87.69175, 41.85530, // BOTTOM RIGHT
+            -87.70340, 41.85530  // BOTTOM LEFT
         )
     ),
 
@@ -267,10 +267,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-81.40275, 28.53902),
         imageName = "edcorlando2022",
         imageCoordinates = imageQuad(
-            -81.40675, 28.54410, // TOP LEFT
-            -81.39580, 28.54410, // TOP RIGHT
-            -81.39580, 28.52900, // BOTTOM RIGHT
-            -81.40675, 28.52900  // BOTTOM LEFT
+            -81.40655, 28.54297, // TOP LEFT
+            -81.39585, 28.54297, // TOP RIGHT
+            -81.39585, 28.53218, // BOTTOM RIGHT
+            -81.40655, 28.53218  // BOTTOM LEFT
         )
     ),
 
@@ -284,10 +284,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-97.76661, 30.26768),
         imageName = "austincitylimits2026",
         imageCoordinates = imageQuad(
-            -97.78180, 30.27210, // TOP LEFT
-            -97.75520, 30.27210, // TOP RIGHT
-            -97.75520, 30.26080, // BOTTOM RIGHT
-            -97.78180, 30.26080  // BOTTOM LEFT
+            -97.77720, 30.27080, // TOP LEFT
+            -97.76020, 30.27080, // TOP RIGHT
+            -97.76020, 30.26338, // BOTTOM RIGHT
+            -97.77720, 30.26338  // BOTTOM LEFT
         )
     ),
 
@@ -301,10 +301,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-115.13656, 36.16931),
         imageName = "lifeisbeautiful2023",
         imageCoordinates = imageQuad(
-            -115.140690, 36.174297, // TOP LEFT
-            -115.131017, 36.171731, // TOP RIGHT
-            -115.132436, 36.164326, // BOTTOM RIGHT
-            -115.142110, 36.166892  // BOTTOM LEFT
+            -115.139147, 36.173818, // TOP LEFT
+            -115.131481, 36.170475, // TOP RIGHT
+            -115.133510, 36.164371, // BOTTOM RIGHT
+            -115.141628, 36.167792  // BOTTOM LEFT
         )
     ),
 
@@ -318,10 +318,10 @@ val upcomingFestivals = listOf(
         center = Point.fromLngLat(-82.40407, 39.93982),
         imageName = "lostlands2025",
         imageCoordinates = imageQuad(
-            -82.42950, 39.95850, // TOP LEFT
-            -82.39800, 39.95850, // TOP RIGHT
-            -82.39800, 39.91970, // BOTTOM RIGHT
-            -82.42950, 39.91970  // BOTTOM LEFT
+            -82.42515, 39.94535, // TOP LEFT
+            -82.40070, 39.94420, // TOP RIGHT
+            -82.40155, 39.92870, // BOTTOM RIGHT
+            -82.42600, 39.92985  // BOTTOM LEFT
         )
     ),
 
@@ -538,7 +538,8 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             selectedFestival = userFestival, onFestivalSelected = { userFestival = it },
             availableParties = availableParties, viewModel = viewModel,
             onLaunchMap = { currentScreen = AppScreen.Map },
-            onNavigateProfile = { currentScreen = AppScreen.Profile }
+            onNavigateProfile = { currentScreen = AppScreen.Profile },
+            onNavigateChat = { currentScreen = AppScreen.Chat }
         )
 
         AppScreen.Map -> MainMapScreen(
@@ -553,13 +554,20 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             onFestivalChange = { userFestival = it },
             availableParties = availableParties,
             onNavigateHome = { currentScreen = AppScreen.Setup },
-            onNavigateProfile = { currentScreen = AppScreen.Profile }
+            onNavigateProfile = { currentScreen = AppScreen.Profile },
+            onNavigateChat = { currentScreen = AppScreen.Chat }
         )
 
         AppScreen.Profile -> ProfileScreen(
             viewModel = viewModel,
             onNavigateBack = { currentScreen = AppScreen.Setup },
             onLogout = { currentScreen = AppScreen.Login }
+        )
+
+        AppScreen.Chat -> ChatScreen(
+            viewModel = viewModel,
+            activeParty = userParty,
+            onNavigateBack = { currentScreen = AppScreen.Setup }
         )
     }
 }
@@ -968,7 +976,8 @@ fun SetupScreen(
     availableParties: List<PartyGroup>,
     viewModel: MapViewModel,
     onLaunchMap: () -> Unit,
-    onNavigateProfile: () -> Unit
+    onNavigateProfile: () -> Unit,
+    onNavigateChat: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1297,14 +1306,15 @@ fun SetupScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextButton(onClick = { showFriendsDashboard = true }) {
-                Text("Friends Dashboard", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                Text("Friends", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
             }
-            TextButton(onClick = onNavigateProfile) {
-                Text(
-                    "Profile",
-                    color = stageKeeperPurple,
-                    fontWeight = FontWeight.Bold
-                )
+            Row {
+                TextButton(onClick = onNavigateChat) {
+                    Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                }
+                TextButton(onClick = onNavigateProfile) {
+                    Text("Profile", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Spacer(modifier = Modifier.height(48.dp))
@@ -1485,7 +1495,8 @@ fun MainMapScreen(
     onFestivalChange: (String) -> Unit,
     availableParties: List<PartyGroup>,
     onNavigateHome: () -> Unit,
-    onNavigateProfile: () -> Unit
+    onNavigateProfile: () -> Unit,
+    onNavigateChat: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1668,24 +1679,16 @@ fun MainMapScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 TextButton(onClick = onNavigateHome) {
-                    Text(
-                        "Home",
-                        color = stageKeeperPurple,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Home", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
                 }
-                Text(
-                    "StageKeeper",
-                    color = stageKeeperPurple,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                TextButton(onClick = onNavigateProfile) {
-                    Text(
-                        "Profile",
-                        color = stageKeeperPurple,
-                        fontWeight = FontWeight.Bold
-                    )
+                Text("StageKeeper", color = stageKeeperPurple, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Row {
+                    TextButton(onClick = onNavigateChat) {
+                        Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onNavigateProfile) {
+                        Text("Profile", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -1915,7 +1918,7 @@ fun MainMapScreen(
                                         )
                                         mapStyle.addLayer(
                                             rasterLayer("festival-overlay-layer", "festival-overlay-source") {
-                                                rasterOpacity(0.90) // 90% transparency
+                                                rasterOpacity(0.45) // 45% transparency
                                             }
                                         )
                                     } else {
@@ -1989,6 +1992,177 @@ fun MainMapScreen(
                     .padding(start = 8.dp),
                 shape = RoundedCornerShape(8.dp)
             ) { Text("Clear Pins", fontWeight = FontWeight.Bold, color = Color.White) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatScreen(
+    viewModel: MapViewModel,
+    activeParty: String,
+    onNavigateBack: () -> Unit
+) {
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperBlue = Color(0xFF00BFFF)
+
+    var selectedTab by remember { mutableStateOf("Crew") }
+    var selectedFriend by remember { mutableStateOf<User?>(null) }
+    var chatText by remember { mutableStateOf("") }
+
+    val partyMessages by viewModel.partyMessages.collectAsState()
+    val dmMessages by viewModel.dmMessages.collectAsState()
+    val currentUser by viewModel.currentUser.collectAsState()
+    val friendsList by viewModel.friendsList.collectAsState()
+
+    val listState = rememberLazyListState()
+
+    // Auto-listen to crew chat when tab opens
+    LaunchedEffect(selectedTab, activeParty) {
+        if (selectedTab == "Crew" && activeParty != "Select Party") {
+            viewModel.startListeningToPartyChat(activeParty)
+        }
+    }
+
+    // Auto-listen to DM when friend selected
+    LaunchedEffect(selectedFriend) {
+        selectedFriend?.let {
+            viewModel.startListeningToDMs(it.userId)
+        }
+    }
+
+    // Auto-scroll to bottom on new message
+    LaunchedEffect(partyMessages.size, dmMessages.size) {
+        if (selectedTab == "Crew" && partyMessages.isNotEmpty()) {
+            listState.animateScrollToItem(partyMessages.size - 1)
+        } else if (selectedTab == "DMs" && selectedFriend != null && dmMessages.isNotEmpty()) {
+            listState.animateScrollToItem(dmMessages.size - 1)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(stageKeeperDark).systemBarsPadding()) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = {
+                if (selectedTab == "DMs" && selectedFriend != null) {
+                    selectedFriend = null
+                    viewModel.stopListeningToDMs()
+                } else {
+                    onNavigateBack()
+                }
+            }) {
+                Text("Back", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            }
+
+            Text(
+                if (selectedTab == "Crew") activeParty else selectedFriend?.displayName ?: "Direct Messages",
+                color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.width(48.dp)) // balance layout
+        }
+
+        // Tabs
+        if (selectedFriend == null) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(
+                    onClick = { selectedTab = "Crew" },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "Crew") stageKeeperPurple else Color.DarkGray),
+                    modifier = Modifier.weight(1f).padding(end = 4.dp)
+                ) { Text("Crew Chat", color = Color.White) }
+
+                Button(
+                    onClick = { selectedTab = "DMs" },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "DMs") stageKeeperPurple else Color.DarkGray),
+                    modifier = Modifier.weight(1f).padding(start = 4.dp)
+                ) { Text("Direct Messages", color = Color.White) }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Body
+        if (selectedTab == "DMs" && selectedFriend == null) {
+            // Friend List
+            LazyColumn(modifier = Modifier.weight(1f).padding(16.dp)) {
+                items(friendsList) { friend ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { selectedFriend = friend },
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AccountCircle, contentDescription = null, tint = stageKeeperBlue, modifier = Modifier.size(40.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(friend.displayName, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("@${friend.username}", color = Color.LightGray, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Chat Messages
+            val currentMessages = if (selectedTab == "Crew") partyMessages else dmMessages
+
+            LazyColumn(modifier = Modifier.weight(1f).padding(horizontal = 16.dp), state = listState) {
+                items(currentMessages) { msg ->
+                    val isMe = msg.senderId == currentUser?.userId
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
+                    ) {
+                        Column(horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
+                            if (!isMe && selectedTab == "Crew") {
+                                Text(msg.senderName, color = Color.LightGray, fontSize = 10.sp, modifier = Modifier.padding(bottom = 2.dp, start = 4.dp))
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isMe) stageKeeperPurple else Color(0xFF333333))
+                                    .padding(12.dp)
+                            ) {
+                                Text(msg.text, color = Color.White, fontSize = 16.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Input Field
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = chatText,
+                    onValueChange = { chatText = it },
+                    placeholder = { Text("Message...", color = Color.Gray) },
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                        focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
+                    ),
+                    shape = RoundedCornerShape(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        if (chatText.isNotBlank()) {
+                            if (selectedTab == "Crew") viewModel.sendPartyMessage(activeParty, chatText)
+                            else selectedFriend?.let { viewModel.sendDirectMessage(it.userId, chatText) }
+                            chatText = ""
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+                    shape = CircleShape,
+                    modifier = Modifier.size(50.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("➤", fontSize = 18.sp, color = Color.White)
+                }
+            }
         }
     }
 }
