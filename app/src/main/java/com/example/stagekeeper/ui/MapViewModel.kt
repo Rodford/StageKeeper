@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.stagekeeper.data.ChatMessage
 import com.example.stagekeeper.data.FriendRequest
 import com.example.stagekeeper.data.PartyGroup
 import com.example.stagekeeper.data.PartyInvite
@@ -12,10 +13,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -34,6 +37,16 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser
+
+    // --- CHAT STATES ---
+    private val _partyMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val partyMessages: StateFlow<List<ChatMessage>> = _partyMessages.asStateFlow()
+
+    private val _dmMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val dmMessages: StateFlow<List<ChatMessage>> = _dmMessages.asStateFlow()
+
+    private var partyChatListener: ListenerRegistration? = null
+    private var dmChatListener: ListenerRegistration? = null
 
     private fun cacheEmergencyInfo(user: User) {
         val prefs = getApplication<Application>().getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
@@ -65,6 +78,86 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // ==========================================
+    // CHAT SYSTEM LOGIC
+    // ==========================================
+
+    fun sendPartyMessage(partyName: String, text: String) {
+        val user = currentUser.value ?: return
+        val party = _availableParties.value.find { it.partyName == partyName } ?: return
+
+        val message = ChatMessage(
+            messageId = UUID.randomUUID().toString(),
+            senderId = user.userId,
+            senderName = user.displayName,
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+
+        firestore.collection("parties").document(party.partyId)
+            .collection("messages").document(message.messageId)
+            .set(message)
+    }
+
+    fun startListeningToPartyChat(partyName: String) {
+        partyChatListener?.remove()
+        val party = _availableParties.value.find { it.partyName == partyName } ?: return
+
+        partyChatListener = firestore.collection("parties").document(party.partyId)
+            .collection("messages")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) return@addSnapshotListener
+
+                val messages = snapshot.documents.mapNotNull { it.toObject(ChatMessage::class.java) }
+                _partyMessages.value = messages
+            }
+    }
+
+    private fun getDMThreadId(userId1: String, userId2: String): String {
+        return if (userId1 < userId2) "${userId1}_${userId2}" else "${userId2}_${userId1}"
+    }
+
+    fun sendDirectMessage(friendId: String, text: String) {
+        val user = currentUser.value ?: return
+        val threadId = getDMThreadId(user.userId, friendId)
+
+        val message = ChatMessage(
+            messageId = UUID.randomUUID().toString(),
+            senderId = user.userId,
+            senderName = user.displayName,
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+
+        firestore.collection("direct_messages").document(threadId)
+            .collection("messages").document(message.messageId)
+            .set(message)
+    }
+
+    fun startListeningToDMs(friendId: String) {
+        dmChatListener?.remove()
+        val user = currentUser.value ?: return
+        val threadId = getDMThreadId(user.userId, friendId)
+
+        dmChatListener = firestore.collection("direct_messages").document(threadId)
+            .collection("messages")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) return@addSnapshotListener
+
+                val messages = snapshot.documents.mapNotNull { it.toObject(ChatMessage::class.java) }
+                _dmMessages.value = messages
+            }
+    }
+
+    fun stopListeningToDMs() {
+        dmChatListener?.remove()
+        dmChatListener = null
+        _dmMessages.value = emptyList()
+    }
+
 
     // --- FRIENDS & INVITES STATE ---
     private val _friendsList = MutableStateFlow<List<User>>(emptyList())
@@ -556,6 +649,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         _currentUser.value = null
         inviteListener?.remove()
         friendRequestListener?.remove()
+        partyChatListener?.remove()
+        dmChatListener?.remove()
         turnOffOfflineMesh()
     }
 
@@ -610,5 +705,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         turnOffOfflineMesh()
+        partyChatListener?.remove()
+        dmChatListener?.remove()
     }
 }
