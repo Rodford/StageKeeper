@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -34,8 +35,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LayersClear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -86,12 +91,17 @@ import com.mapbox.maps.extension.style.sources.generated.imageSource
 import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.layers.generated.rasterLayer
 import com.mapbox.maps.extension.style.layers.addLayer
+import com.mapbox.maps.extension.style.layers.addLayerBelow
+import com.mapbox.maps.extension.style.layers.generated.RasterLayer
+import com.mapbox.maps.extension.style.layers.getLayerAs
 import com.mapbox.maps.extension.style.sources.getSourceAs
+import com.mapbox.maps.plugin.gestures.gestures
+import com.mapbox.maps.plugin.gestures.addOnMapLongClickListener
 import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
 
-enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat }
+enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat, Lineup }
 
 /*
 // Database of 100 major US music festivals with accurate venue coordinates
@@ -218,6 +228,7 @@ data class FestivalData(
     val name: String,
     val dates: String,
     val center: Point,
+    val defaultZoom: Double = 14.5,
     val imageName: String,
     val imageCoordinates: List<List<Double>>
 )
@@ -231,12 +242,13 @@ val upcomingFestivals = listOf(
         name = "Arc Music Festival (IL)",
         dates = "Sep 4 - Sep 6",
         center = Point.fromLngLat(-87.66478, 41.88392),
+        defaultZoom = 16.5,
         imageName = "arc_music2026",
         imageCoordinates = imageQuad(
-            -87.66838, 41.88557, // TOP LEFT
-            -87.66219, 41.88557, // TOP RIGHT
-            -87.66219, 41.88118, // BOTTOM RIGHT
-            -87.66838, 41.88118  // BOTTOM LEFT
+            -87.66795, 41.88562, // TOP LEFT
+            -87.66302, 41.88562, // TOP RIGHT
+            -87.66302, 41.88136, // BOTTOM RIGHT
+            -87.66795, 41.88136  // BOTTOM LEFT
         )
     ),
 
@@ -248,6 +260,7 @@ val upcomingFestivals = listOf(
         name = "Riot Fest (IL)",
         dates = "Sep 18 - Sep 20",
         center = Point.fromLngLat(-87.6994, 41.8572),
+        defaultZoom = 14.8,
         imageName = "riotfest2025",
         imageCoordinates = imageQuad(
             -87.70340, 41.86125, // TOP LEFT
@@ -265,6 +278,7 @@ val upcomingFestivals = listOf(
         name = "EDC Orlando (FL)",
         dates = "Nov 6 - Nov 8",
         center = Point.fromLngLat(-81.40275, 28.53902),
+        defaultZoom = 15.2,
         imageName = "edcorlando2022",
         imageCoordinates = imageQuad(
             -81.40655, 28.54297, // TOP LEFT
@@ -282,6 +296,7 @@ val upcomingFestivals = listOf(
         name = "Austin City Limits (TX)",
         dates = "Oct 2 - Oct 4",
         center = Point.fromLngLat(-97.76661, 30.26768),
+        defaultZoom = 14.5,
         imageName = "austincitylimits2026",
         imageCoordinates = imageQuad(
             -97.77720, 30.27080, // TOP LEFT
@@ -299,6 +314,7 @@ val upcomingFestivals = listOf(
         name = "Life is Beautiful (NV)",
         dates = "Sep 18 - Sep 20",
         center = Point.fromLngLat(-115.13656, 36.16931),
+        defaultZoom = 15.5,
         imageName = "lifeisbeautiful2023",
         imageCoordinates = imageQuad(
             -115.139147, 36.173818, // TOP LEFT
@@ -315,13 +331,14 @@ val upcomingFestivals = listOf(
     FestivalData(
         name = "Lost Lands (OH)",
         dates = "Sep 25 - Sep 27",
-        center = Point.fromLngLat(-82.40407, 39.93982),
+        center = Point.fromLngLat(-82.41100, 39.93982),
+        defaultZoom = 13.5,
         imageName = "lostlands2025",
         imageCoordinates = imageQuad(
-            -82.42515, 39.94535, // TOP LEFT
-            -82.40070, 39.94420, // TOP RIGHT
-            -82.40155, 39.92870, // BOTTOM RIGHT
-            -82.42600, 39.92985  // BOTTOM LEFT
+            -82.42915, 39.94535, // TOP LEFT
+            -82.40470, 39.94420, // TOP RIGHT
+            -82.40555, 39.92870, // BOTTOM RIGHT
+            -82.43000, 39.92985  // BOTTOM LEFT
         )
     ),
 
@@ -333,6 +350,7 @@ val upcomingFestivals = listOf(
         name = "Burning Man (NV)",
         dates = "Aug 30 - Sep 7",
         center = Point.fromLngLat(-119.207871, 40.783242),
+        defaultZoom = 12.5,
         imageName = "burningman2026",
         imageCoordinates = imageQuad(
             -119.206674, 40.815992, // TOP LEFT
@@ -350,12 +368,13 @@ val upcomingFestivals = listOf(
         name = "Dancefestopia (KS)",
         dates = "Sep 7 - Sep 13",
         center = Point.fromLngLat(-94.668760, 38.400500),
+        defaultZoom = 14.5,
         imageName = "dancefestopia2026",
         imageCoordinates = imageQuad(
-            -94.673609, 38.405263, // TOP LEFT
-            -94.664109, 38.405263, // TOP RIGHT
-            -94.664109, 38.396858, // BOTTOM RIGHT
-            -94.673609, 38.396858  // BOTTOM LEFT
+            -94.675499, 38.404613, // TOP LEFT
+            -94.663831, 38.404613, // TOP RIGHT
+            -94.663831, 38.396208, // BOTTOM RIGHT
+            -94.675499, 38.396208  // BOTTOM LEFT
         )
     ),
 
@@ -367,12 +386,13 @@ val upcomingFestivals = listOf(
         name = "Aftershock (CA)",
         dates = "Oct 8 - Oct 11",
         center = Point.fromLngLat(-121.50741, 38.60135),
+        defaultZoom = 14.5,
         imageName = "aftershock2026",
         imageCoordinates = imageQuad(
-            -121.51850, 38.60890, // TOP LEFT
-            -121.49620, 38.60890, // TOP RIGHT
-            -121.49620, 38.59320, // BOTTOM RIGHT
-            -121.51850, 38.59320  // BOTTOM LEFT
+            -121.51058, 38.60470, // TOP LEFT
+            -121.50073, 38.60470, // TOP RIGHT
+            -121.50073, 38.59800, // BOTTOM RIGHT
+            -121.51058, 38.59800  // BOTTOM LEFT
         )
     ),
 
@@ -383,13 +403,14 @@ val upcomingFestivals = listOf(
     FestivalData(
         name = "Electric Zoo (NY)",
         dates = "Sep 4 - Sep 6",
-        center = Point.fromLngLat(-73.92178, 40.79387),
+        center = Point.fromLngLat(-73.921154, 40.799337),
+        defaultZoom = 15.8,
         imageName = "electriczoo2016",
         imageCoordinates = imageQuad(
-            -73.93320, 40.79860, // TOP LEFT
-            -73.91620, 40.79860, // TOP RIGHT
-            -73.91620, 40.78820, // BOTTOM RIGHT
-            -73.93320, 40.78820  // BOTTOM LEFT
+            -73.922126, 40.801838, // TOP LEFT
+            -73.918820, 40.799180, // TOP RIGHT
+            -73.919998, 40.797350, // BOTTOM RIGHT
+            -73.923672, 40.798980  // BOTTOM LEFT
         )
     ),
 
@@ -400,14 +421,262 @@ val upcomingFestivals = listOf(
     FestivalData(
         name = "Louder Than Life (KY)",
         dates = "Sep 24 - Sep 27",
-        center = Point.fromLngLat(-85.74218, 38.20007),
+        center = Point.fromLngLat(-85.74496, 38.19690),
+        defaultZoom = 15.1,
         imageName = "louderthanlife2026",
         imageCoordinates = imageQuad(
-            -85.75020, 38.20600, // TOP LEFT
-            -85.73420, 38.20600, // TOP RIGHT
-            -85.73420, 38.19480, // BOTTOM RIGHT
-            -85.75020, 38.19480  // BOTTOM LEFT
+            -85.74803, 38.20270, // TOP LEFT
+            -85.73947, 38.20166, // TOP RIGHT
+            -85.74189, 38.19110, // BOTTOM RIGHT
+            -85.75045, 38.19214  // BOTTOM LEFT
         )
+    )
+)
+
+// ==========================================
+// FESTIVAL LINEUP DATA & MODELS
+// ==========================================
+data class FestivalSet(
+    val artistName: String,
+    val stage: String,
+    val day: String,
+    val startTime: String = "",
+    val endTime: String = "",
+    val genre: String = ""
+)
+
+val festivalLineupsDatabase = mapOf(
+    "Dancefestopia (KS)" to listOf(
+        // THURSDAY SEPT. 10
+        FestivalSet("Paper Skies", "Emerald Stage", "Thursday", "6:00 PM", "7:00 PM", "Bass"),
+        FestivalSet("Lumasi", "Emerald Stage", "Thursday", "7:00 PM", "8:00 PM", "Bass"),
+        FestivalSet("Effin", "Emerald Stage", "Thursday", "8:00 PM", "9:00 PM", "Dubstep"),
+        FestivalSet("Ray Volpe", "Emerald Stage", "Thursday", "9:00 PM", "10:00 PM", "Dubstep"),
+        FestivalSet("Crankdat", "Emerald Stage", "Thursday", "10:15 PM", "11:45 PM", "Heavy Bass"),
+        FestivalSet("Nmezee", "Lollipop Stage", "Thursday", "8:00 PM", "8:45 PM"),
+        FestivalSet("Big Dyl B2B Dr3vd Nox", "Lollipop Stage", "Thursday", "8:45 PM", "9:30 PM"),
+        FestivalSet("Mike HQ B2B Hooplah", "Lollipop Stage", "Thursday", "9:30 PM", "10:15 PM"),
+        FestivalSet("Psilly B2B Star Complex", "Lollipop Stage", "Thursday", "10:15 PM", "11:00 PM"),
+        FestivalSet("Phantom Operator", "Lollipop Stage", "Thursday", "11:00 PM", "12:00 AM"),
+        FestivalSet("Grabbitz", "Lollipop Stage", "Thursday", "12:00 AM", "1:00 AM"),
+        FestivalSet("Mad Dubz", "Lollipop Stage", "Thursday", "1:00 AM", "2:00 AM"),
+        FestivalSet("Hexxa", "Lollipop Stage", "Thursday", "2:00 AM", "3:00 AM"),
+        FestivalSet("Ozztin", "Lollipop Stage", "Thursday", "3:00 AM", "4:00 AM"),
+        FestivalSet("Chmura", "Lollipop Stage", "Thursday", "4:00 AM", "5:00 AM"),
+        FestivalSet("Austeria", "Lollipop Stage", "Thursday", "5:00 AM", "6:00 AM"),
+        FestivalSet("Philthy B2B Hope Circuit", "Forest Stage", "Thursday", "1:00 PM", "1:45 PM"),
+        FestivalSet("Balance B2B Mumbo", "Forest Stage", "Thursday", "1:45 PM", "2:30 PM"),
+        FestivalSet("14All Fam", "Forest Stage", "Thursday", "2:30 PM", "3:15 PM"),
+        FestivalSet("Sleeper B2B Thresh", "Forest Stage", "Thursday", "3:15 PM", "4:00 PM"),
+        FestivalSet("Skrrt Cobain", "Forest Stage", "Thursday", "4:00 PM", "4:45 PM"),
+        FestivalSet("Dreamzzz", "Forest Stage", "Thursday", "4:45 PM", "5:30 PM"),
+        FestivalSet("Bvssbratt", "Forest Stage", "Thursday", "5:30 PM", "6:15 PM"),
+        FestivalSet("Fractal Bloom", "Forest Stage", "Thursday", "6:15 PM", "7:00 PM"),
+        FestivalSet("Unfettered", "Rekinection Stage", "Thursday", "5:30 PM", "6:30 PM"),
+        FestivalSet("Ryan Richardson", "Rekinection Stage", "Thursday", "6:30 PM", "7:30 PM"),
+        FestivalSet("Dayzero", "Rekinection Stage", "Thursday", "7:30 PM", "9:00 PM"),
+        FestivalSet("Rüger", "Rekinection Stage", "Thursday", "11:45 PM", "1:00 AM"),
+
+        // FRIDAY SEPT. 11
+        FestivalSet("Lightcode by LSDREAM", "Emerald Stage", "Friday", "2:00 PM", "3:30 PM", "Meditation / Ambient"),
+        FestivalSet("Riddim Slinger B2B Bluff Baby", "Emerald Stage", "Friday", "4:00 PM", "5:00 PM", "Riddim"),
+        FestivalSet("Izzy Vadim", "Emerald Stage", "Friday", "5:00 PM", "6:00 PM", "Bass"),
+        FestivalSet("Jaenga", "Emerald Stage", "Friday", "6:00 PM", "7:00 PM", "Bass"),
+        FestivalSet("Wonkywilla", "Emerald Stage", "Friday", "7:00 PM", "8:00 PM", "Bass"),
+        FestivalSet("Know Good", "Emerald Stage", "Friday", "8:00 PM", "9:00 PM", "Bass"),
+        FestivalSet("Eazybaked", "Emerald Stage", "Friday", "9:00 PM", "10:00 PM", "Experimental Bass"),
+        FestivalSet("Wreckno", "Emerald Stage", "Friday", "10:00 PM", "11:00 PM", "Bass"),
+        FestivalSet("LSDREAM", "Emerald Stage", "Friday", "11:10 PM", "12:10 AM", "Bass"),
+        FestivalSet("GRiZ", "Emerald Stage", "Friday", "12:20 AM", "1:35 AM", "Future Funk / Bass"),
+        FestivalSet("Sharker", "Lollipop Stage", "Friday", "7:00 PM", "7:45 PM"),
+        FestivalSet("Blare", "Lollipop Stage", "Friday", "7:45 PM", "8:30 PM"),
+        FestivalSet("B!gmac B2B Meteorik", "Lollipop Stage", "Friday", "8:30 PM", "9:15 PM"),
+        FestivalSet("Rüger B2B Darkwood", "Lollipop Stage", "Friday", "9:15 PM", "10:00 PM"),
+        FestivalSet("Air Quotes B2B Itsnotimportant", "Lollipop Stage", "Friday", "10:00 PM", "10:45 PM"),
+        FestivalSet("Acrylik B2B Anj.", "Lollipop Stage", "Friday", "10:45 PM", "11:30 PM"),
+        FestivalSet("The Rico Suave", "Lollipop Stage", "Friday", "11:30 PM", "12:15 AM"),
+        FestivalSet("Hokage B2B Slayday", "Lollipop Stage", "Friday", "12:15 AM", "1:00 AM"),
+        FestivalSet("Mushroom Cloud", "Lollipop Stage", "Friday", "1:00 AM", "2:00 AM"),
+        FestivalSet("Infekt", "Lollipop Stage", "Friday", "2:00 AM", "3:00 AM", "Riddim"),
+        FestivalSet("Phrva", "Lollipop Stage", "Friday", "3:00 AM", "4:00 AM"),
+        FestivalSet("Star Monster", "Lollipop Stage", "Friday", "4:00 AM", "5:00 AM"),
+        FestivalSet("Pretty Sweet", "Lollipop Stage", "Friday", "5:00 AM", "6:00 AM"),
+        FestivalSet("Megatron B2B Kxiti", "Forest Stage", "Friday", "4:00 PM", "4:45 PM"),
+        FestivalSet("Elias True", "Forest Stage", "Friday", "4:45 PM", "5:30 PM"),
+        FestivalSet("Haijack B2B Pjknik", "Forest Stage", "Friday", "5:30 PM", "6:15 PM"),
+        FestivalSet("Bleach", "Forest Stage", "Friday", "6:15 PM", "7:00 PM"),
+        FestivalSet("Dawni", "Forest Stage", "Friday", "10:00 PM", "10:45 PM"),
+        FestivalSet("SCSI", "Forest Stage", "Friday", "10:45 PM", "11:30 PM"),
+        FestivalSet("Sugar Drip", "Forest Stage", "Friday", "11:30 PM", "12:15 AM"),
+        FestivalSet("Mark OG", "Forest Stage", "Friday", "12:15 AM", "1:00 AM"),
+        FestivalSet("Grinz B2B Ginja Ninja", "Forest Stage", "Friday", "1:00 AM", "2:00 AM"),
+        FestivalSet("Anti Plastic", "Rekinection Stage", "Friday", "12:30 PM", "1:45 PM"),
+        FestivalSet("Manipadme", "Rekinection Stage", "Friday", "3:45 PM", "5:00 PM"),
+        FestivalSet("Subrosa...", "Rekinection Stage", "Friday", "5:00 PM", "6:15 PM"),
+        FestivalSet("Mermix", "Rekinection Stage", "Friday", "6:15 PM", "7:30 PM"),
+        FestivalSet("Journey Jones", "Rekinection Stage", "Friday", "7:30 PM", "8:45 PM"),
+        FestivalSet("D.Mic", "Rekinection Stage", "Friday", "8:45 PM", "10:00 PM"),
+        FestivalSet("Subplay", "Rekinection Stage", "Friday", "10:00 PM", "11:00 PM"),
+        FestivalSet("Rekinection Aerial-Fire-Dance Show", "Rekinection Stage", "Friday", "1:30 AM", "2:30 AM"),
+        FestivalSet("Mycelium", "Pool Stage", "Friday", "12:30 PM", "1:15 PM"),
+        FestivalSet("Litebug", "Pool Stage", "Friday", "1:15 PM", "2:00 PM"),
+        FestivalSet("Mther", "Pool Stage", "Friday", "3:30 PM", "4:15 PM"),
+        FestivalSet("N8VBOY", "Pool Stage", "Friday", "4:15 PM", "5:00 PM"),
+        FestivalSet("Nowhere Further", "Pool Stage", "Friday", "5:00 PM", "5:45 PM"),
+        FestivalSet("Kota Who?", "Pool Stage", "Friday", "5:45 PM", "6:30 PM"),
+
+        // SATURDAY SEPT. 12
+        FestivalSet("Dream & Friends", "Emerald Stage", "Saturday", "4:00 PM", "5:00 PM"),
+        FestivalSet("Tynan", "Emerald Stage", "Saturday", "5:00 PM", "6:00 PM", "Bass / Trap"),
+        FestivalSet("Smoakland", "Emerald Stage", "Saturday", "6:00 PM", "7:00 PM", "Bass"),
+        FestivalSet("Reaper", "Emerald Stage", "Saturday", "7:00 PM", "8:00 PM", "Drum & Bass"),
+        FestivalSet("Heyz", "Emerald Stage", "Saturday", "8:00 PM", "9:00 PM", "Bass"),
+        FestivalSet("Layz", "Emerald Stage", "Saturday", "9:00 PM", "10:00 PM", "Heavy Dubstep"),
+        FestivalSet("Alleycvt", "Emerald Stage", "Saturday", "10:00 PM", "11:00 PM", "Melodic Dubstep"),
+        FestivalSet("Sullivan King", "Emerald Stage", "Saturday", "11:00 PM", "12:00 AM", "Metalstep"),
+        FestivalSet("Excision", "Emerald Stage", "Saturday", "12:15 AM", "1:30 AM", "Dubstep"),
+        FestivalSet("Half Moon", "Lollipop Stage", "Saturday", "7:00 PM", "7:45 PM"),
+        FestivalSet("Rise B2B Bagz", "Lollipop Stage", "Saturday", "7:45 PM", "8:30 PM"),
+        FestivalSet("Lektrik B2B Sheppa", "Lollipop Stage", "Saturday", "8:30 PM", "9:15 PM"),
+        FestivalSet("Y'all Thought B2B Txana", "Lollipop Stage", "Saturday", "9:15 PM", "10:00 PM"),
+        FestivalSet("Dirty Vacation B2B Imposter Sindrum", "Lollipop Stage", "Saturday", "10:00 PM", "10:45 PM"),
+        FestivalSet("Elixa B2B King Coopa", "Lollipop Stage", "Saturday", "10:45 PM", "11:30 PM"),
+        FestivalSet("Savage Habits B2B Botz & Bandz", "Lollipop Stage", "Saturday", "11:30 PM", "12:30 AM"),
+        FestivalSet("Oliverse", "Lollipop Stage", "Saturday", "12:30 AM", "2:00 AM", "Dubstep"),
+        FestivalSet("Kompany", "Lollipop Stage", "Saturday", "2:00 AM", "3:00 AM", "Dubstep"),
+        FestivalSet("Calcium", "Lollipop Stage", "Saturday", "3:00 AM", "4:00 AM", "Dubstep"),
+        FestivalSet("Mport", "Lollipop Stage", "Saturday", "4:00 AM", "5:00 AM"),
+        FestivalSet("Just A Gent", "Lollipop Stage", "Saturday", "5:00 AM", "6:00 AM"),
+        FestivalSet("Madnoiz B2B Slabb", "Forest Stage", "Saturday", "4:00 PM", "4:45 PM"),
+        FestivalSet("Etrnl B2B Pandicorn", "Forest Stage", "Saturday", "4:45 PM", "5:30 PM"),
+        FestivalSet("Panda", "Forest Stage", "Saturday", "5:30 PM", "6:15 PM"),
+        FestivalSet("Hostile", "Forest Stage", "Saturday", "6:15 PM", "7:00 PM"),
+        FestivalSet("Cinimod", "Forest Stage", "Saturday", "10:00 PM", "10:45 PM"),
+        FestivalSet("Deluluz", "Forest Stage", "Saturday", "10:45 PM", "11:30 PM"),
+        FestivalSet("Visions", "Forest Stage", "Saturday", "11:30 PM", "12:15 AM"),
+        FestivalSet("Illite", "Forest Stage", "Saturday", "12:15 AM", "1:00 AM"),
+        FestivalSet("Mob Boss B2B V Tach", "Forest Stage", "Saturday", "1:00 AM", "2:00 AM"),
+        FestivalSet("Apacolypto", "Rekinection Stage", "Saturday", "1:15 PM", "2:30 PM"),
+        FestivalSet("Proper Grammar", "Rekinection Stage", "Saturday", "2:30 PM", "3:45 PM"),
+        FestivalSet("Subrosa...", "Rekinection Stage", "Saturday", "3:45 PM", "5:00 PM"),
+        FestivalSet("G@lxy", "Rekinection Stage", "Saturday", "5:00 PM", "6:15 PM"),
+        FestivalSet("Vincit", "Rekinection Stage", "Saturday", "6:15 PM", "7:30 PM"),
+        FestivalSet("Darkwood B2B Callisto", "Rekinection Stage", "Saturday", "7:30 PM", "8:45 PM"),
+        FestivalSet("Zero One", "Rekinection Stage", "Saturday", "8:45 PM", "10:00 PM"),
+        FestivalSet("Buck Norris", "Rekinection Stage", "Saturday", "10:00 PM", "11:00 PM"),
+        FestivalSet("Rekinection Aerial-Fire-Dance Show", "Rekinection Stage", "Saturday", "1:30 AM", "2:30 AM"),
+        FestivalSet("Banditz", "Pool Stage", "Saturday", "12:30 PM", "1:15 PM"),
+        FestivalSet("Rais3r", "Pool Stage", "Saturday", "1:15 PM", "2:00 PM"),
+        FestivalSet("Risa", "Pool Stage", "Saturday", "2:00 PM", "2:45 PM"),
+        FestivalSet("Alil", "Pool Stage", "Saturday", "2:45 PM", "3:30 PM"),
+        FestivalSet("Texas Jack's House Party", "Pool Stage", "Saturday", "3:30 PM", "5:00 PM"),
+
+        // SUNDAY SEPT. 13
+        FestivalSet("Kyokee", "Emerald Stage", "Sunday", "4:00 PM", "5:00 PM"),
+        FestivalSet("Steller", "Emerald Stage", "Sunday", "5:00 PM", "6:00 PM", "Bass"),
+        FestivalSet("Probcause", "Emerald Stage", "Sunday", "6:00 PM", "7:00 PM"),
+        FestivalSet("Jkyl & Hyde", "Emerald Stage", "Sunday", "7:00 PM", "8:00 PM", "Dubstep"),
+        FestivalSet("Sippy", "Emerald Stage", "Sunday", "8:00 PM", "9:00 PM", "Dubstep"),
+        FestivalSet("Ravenscoon", "Emerald Stage", "Sunday", "9:00 PM", "10:00 PM", "Bass"),
+        FestivalSet("Inzo", "Emerald Stage", "Sunday", "10:05 PM", "11:05 PM", "Melodic Bass"),
+        FestivalSet("Zeds Dead", "Emerald Stage", "Sunday", "11:20 PM", "12:50 AM", "Bass / Dubstep"),
+        FestivalSet("Ncite", "Lollipop Stage", "Sunday", "7:00 PM", "7:45 PM"),
+        FestivalSet("Fnu B2B Axe6", "Lollipop Stage", "Sunday", "7:45 PM", "8:30 PM"),
+        FestivalSet("Spenny", "Lollipop Stage", "Sunday", "8:30 PM", "9:15 PM"),
+        FestivalSet("Human Penguin B2B Saul Gucci", "Lollipop Stage", "Sunday", "9:15 PM", "10:00 PM"),
+        FestivalSet("Scum Wubz B2B Larj", "Lollipop Stage", "Sunday", "10:00 PM", "10:45 PM"),
+        FestivalSet("Blaqout", "Lollipop Stage", "Sunday", "10:45 PM", "11:30 PM"),
+        FestivalSet("Riot Ten B2B Bear Grillz", "Lollipop Stage", "Sunday", "11:30 PM", "1:00 AM", "Dubstep"),
+        FestivalSet("Samplifire", "Lollipop Stage", "Sunday", "1:00 AM", "2:00 AM", "Riddim"),
+        FestivalSet("Usaybflow", "Lollipop Stage", "Sunday", "2:00 AM", "3:00 AM"),
+        FestivalSet("Eliminate", "Lollipop Stage", "Sunday", "3:00 AM", "4:00 AM", "Bass / Trap"),
+        FestivalSet("Dnbbq w/ Black Noise, Twotone, Hypnotizm, Kxk, Lütz, Malwar3, Theta Burn", "Forest Stage", "Sunday", "1:00 PM", "6:15 PM", "Drum & Bass"),
+        FestivalSet("Habrin", "Forest Stage", "Sunday", "10:00 PM", "11:00 PM"),
+        FestivalSet("Rissross", "Forest Stage", "Sunday", "11:00 PM", "12:00 AM"),
+        FestivalSet("Yaws", "Rekinection Stage", "Sunday", "1:15 PM", "2:30 PM"),
+        FestivalSet("Hellaquent", "Rekinection Stage", "Sunday", "2:30 PM", "3:45 PM"),
+        FestivalSet("Orb.It", "Rekinection Stage", "Sunday", "3:45 PM", "5:00 PM"),
+        FestivalSet("Just Tommy", "Rekinection Stage", "Sunday", "5:00 PM", "6:15 PM"),
+        FestivalSet("Indigenous", "Rekinection Stage", "Sunday", "6:15 PM", "7:30 PM"),
+        FestivalSet("Babysox", "Rekinection Stage", "Sunday", "7:30 PM", "8:45 PM"),
+        FestivalSet("Lazuli", "Rekinection Stage", "Sunday", "8:45 PM", "10:00 PM"),
+        FestivalSet("Rekinection Aerial-Fire-Dance Show", "Rekinection Stage", "Sunday", "12:50 AM", "1:50 AM"),
+        FestivalSet("Jaywalk", "Pool Stage", "Sunday", "12:30 PM", "1:15 PM"),
+        FestivalSet("User00215", "Pool Stage", "Sunday", "1:15 PM", "2:00 PM"),
+        FestivalSet("Nick Niemeier", "Pool Stage", "Sunday", "2:00 PM", "2:45 PM"),
+        FestivalSet("Aliza", "Pool Stage", "Sunday", "2:45 PM", "3:30 PM"),
+        FestivalSet("Slvr Fox", "Pool Stage", "Sunday", "3:30 PM", "4:15 PM"),
+        FestivalSet("Nofslinger", "Pool Stage", "Sunday", "4:15 PM", "5:00 PM"),
+        FestivalSet("Down Two Freaks", "Pool Stage", "Sunday", "5:00 PM", "5:45 PM")
+    ),
+    "Arc Music Festival (IL)" to listOf(
+        FestivalSet("Chase & Status", "The Grid", "Friday", "7:00 PM", "8:30 PM", "Drum & Bass"),
+        FestivalSet("Sara Landry Presents Eternalism", "The Grid", "Friday", "8:45 PM", "10:00 PM", "Hard Techno"),
+        FestivalSet("Cloonee", "The Grid", "Saturday", "7:00 PM", "8:25 PM", "Tech House"),
+        FestivalSet("MAU P", "The Grid", "Saturday", "8:30 PM", "10:00 PM", "Tech House"),
+        FestivalSet("The Blessed Madonna B2B Lil' Louis", "Area 909", "Saturday", "8:30 PM", "10:00 PM", "House"),
+        FestivalSet("Michael Bibi", "The Grid", "Sunday", "7:00 PM", "8:30 PM", "Tech House"),
+        FestivalSet("Green Velvet B2B Josh Baker", "The Grid", "Sunday", "8:30 PM", "10:00 PM", "House"),
+        FestivalSet("Honey Dijon", "The Grid", "Sunday", "5:30 PM", "7:00 PM", "House")
+    ),
+    "Riot Fest (IL)" to listOf(
+        FestivalSet("Twenty One Pilots", "Riot Stage", "Friday", "", "", "Alt Rock"),
+        FestivalSet("Iggy Pop", "Roots Stage", "Friday", "", "", "Punk Rock"),
+        FestivalSet("Rise Against", "Radical Stage", "Friday", "", "", "Punk Rock"),
+        FestivalSet("Tool", "Riot Stage", "Saturday", "", "", "Prog Metal"),
+        FestivalSet("Morrissey", "Roots Stage", "Saturday", "", "", "Indie Rock"),
+        FestivalSet("NAS", "Radical Stage", "Saturday", "", "", "Hip Hop"),
+        FestivalSet("Pierce The Veil", "Riot Stage", "Sunday", "", "", "Post-Hardcore"),
+        FestivalSet("Alanis Morissette", "Roots Stage", "Sunday", "", "", "Alt Rock"),
+        FestivalSet("Elvis Costello", "Radical Stage", "Sunday", "", "", "Rock")
+    ),
+    "EDC Orlando (FL)" to listOf(
+        FestivalSet("David Guetta", "kineticFIELD", "Friday", "", "", "House"),
+        FestivalSet("Martin Garrix", "kineticFIELD", "Friday", "", "", "Progressive House"),
+        FestivalSet("Hardwell", "circuitGROUNDS", "Friday", "", "", "Electro House"),
+        FestivalSet("Kaskade", "kineticFIELD", "Saturday", "", "", "House"),
+        FestivalSet("Alesso (Sunset Set)", "kineticFIELD", "Saturday", "", "", "Progressive House"),
+        FestivalSet("SLANDER", "circuitGROUNDS", "Saturday", "", "", "Melodic Bass"),
+        FestivalSet("Afrojack", "kineticFIELD", "Sunday", "", "", "Electro House"),
+        FestivalSet("Steve Aoki", "kineticFIELD", "Sunday", "", "", "Electro House"),
+        FestivalSet("Alan Walker", "circuitGROUNDS", "Sunday", "", "", "Electro House")
+    ),
+    "Lost Lands (OH)" to listOf(
+        FestivalSet("Excision (2 Hour Set)", "Prehistoric Stage", "Friday", "", "", "Dubstep"),
+        FestivalSet("Ganja White Night", "Wompy Woods", "Friday", "", "", "Bass"),
+        FestivalSet("SVDDEN DEATH", "Prehistoric Stage", "Saturday", "", "", "Heavy Dubstep"),
+        FestivalSet("Subtronics", "Prehistoric Stage", "Saturday", "", "", "Dubstep"),
+        FestivalSet("Zomboy", "Wompy Woods", "Saturday", "", "", "Dubstep"),
+        FestivalSet("Excision B2B Space Laces", "Prehistoric Stage", "Sunday", "", "", "Dubstep"),
+        FestivalSet("Adventure Club", "Wompy Woods", "Sunday", "", "", "Melodic Dubstep")
+    ),
+    "Austin City Limits (TX)" to listOf(
+        FestivalSet("Skrillex", "American Express", "Friday", "", "", "Electronic"),
+        FestivalSet("Charli XCX", "Honda Stage", "Friday", "", "", "Pop"),
+        FestivalSet("RÜFÜS DU SOL", "American Express", "Saturday", "", "", "Electronic"),
+        FestivalSet("Twenty One Pilots", "Honda Stage", "Saturday", "", "", "Alt Rock"),
+        FestivalSet("Lorde", "American Express", "Sunday", "", "", "Pop"),
+        FestivalSet("The xx", "Honda Stage", "Sunday", "", "", "Indie Pop")
+    ),
+    "Aftershock (CA)" to listOf(
+        FestivalSet("My Chemical Romance", "Jack Daniel's Stage", "Thursday", "", "", "Rock"),
+        FestivalSet("Sublime", "Shockwave Stage", "Thursday", "", "", "Ska Punk"),
+        FestivalSet("Limp Bizkit", "Jack Daniel's Stage", "Friday", "", "", "Nu Metal"),
+        FestivalSet("Wu-Tang Clan", "Shockwave Stage", "Friday", "", "", "Hip Hop"),
+        FestivalSet("Pierce The Veil", "Jack Daniel's Stage", "Saturday", "", "", "Post-Hardcore"),
+        FestivalSet("BABYMETAL", "Shockwave Stage", "Saturday", "", "", "Metal"),
+        FestivalSet("TOOL", "Jack Daniel's Stage", "Sunday", "", "", "Prog Metal"),
+        FestivalSet("Queens of the Stone Age", "Shockwave Stage", "Sunday", "", "", "Hard Rock")
+    ),
+    "Louder Than Life (KY)" to listOf(
+        FestivalSet("Iron Maiden", "Space Zebra Stage", "Thursday", "", "", "Heavy Metal"),
+        FestivalSet("Pantera", "Loudmouth Stage", "Thursday", "", "", "Metal"),
+        FestivalSet("My Chemical Romance", "Space Zebra Stage", "Friday", "", "", "Rock"),
+        FestivalSet("Pierce The Veil", "Loudmouth Stage", "Friday", "", "", "Post-Hardcore"),
+        FestivalSet("Limp Bizkit", "Space Zebra Stage", "Saturday", "", "", "Nu Metal"),
+        FestivalSet("Papa Roach", "Loudmouth Stage", "Saturday", "", "", "Nu Metal"),
+        FestivalSet("TOOL", "Space Zebra Stage", "Sunday", "", "", "Prog Metal"),
+        FestivalSet("Gojira", "Loudmouth Stage", "Sunday", "", "", "Heavy Metal")
     )
 )
 
@@ -539,7 +808,8 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             availableParties = availableParties, viewModel = viewModel,
             onLaunchMap = { currentScreen = AppScreen.Map },
             onNavigateProfile = { currentScreen = AppScreen.Profile },
-            onNavigateChat = { currentScreen = AppScreen.Chat }
+            onNavigateChat = { currentScreen = AppScreen.Chat },
+            onNavigateLineup = { currentScreen = AppScreen.Lineup }
         )
 
         AppScreen.Map -> MainMapScreen(
@@ -555,7 +825,8 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             availableParties = availableParties,
             onNavigateHome = { currentScreen = AppScreen.Setup },
             onNavigateProfile = { currentScreen = AppScreen.Profile },
-            onNavigateChat = { currentScreen = AppScreen.Chat }
+            onNavigateChat = { currentScreen = AppScreen.Chat },
+            onNavigateLineup = { currentScreen = AppScreen.Lineup }
         )
 
         AppScreen.Profile -> ProfileScreen(
@@ -567,6 +838,11 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
         AppScreen.Chat -> ChatScreen(
             viewModel = viewModel,
             activeParty = userParty,
+            onNavigateBack = { currentScreen = AppScreen.Setup }
+        )
+
+        AppScreen.Lineup -> LineupScreen(
+            activeFestival = userFestival,
             onNavigateBack = { currentScreen = AppScreen.Setup }
         )
     }
@@ -977,7 +1253,8 @@ fun SetupScreen(
     viewModel: MapViewModel,
     onLaunchMap: () -> Unit,
     onNavigateProfile: () -> Unit,
-    onNavigateChat: () -> Unit
+    onNavigateChat: () -> Unit,
+    onNavigateLineup: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1309,6 +1586,16 @@ fun SetupScreen(
                 Text("Friends", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
             }
             Row {
+                TextButton(
+                    onClick = onNavigateLineup,
+                    enabled = selectedFestival != "Select Festival"
+                ) {
+                    Text(
+                        "Lineup",
+                        color = if (selectedFestival != "Select Festival") stageKeeperPurple else Color.DarkGray,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 TextButton(onClick = onNavigateChat) {
                     Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
                 }
@@ -1496,7 +1783,8 @@ fun MainMapScreen(
     availableParties: List<PartyGroup>,
     onNavigateHome: () -> Unit,
     onNavigateProfile: () -> Unit,
-    onNavigateChat: () -> Unit
+    onNavigateChat: () -> Unit,
+    onNavigateLineup: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1516,9 +1804,14 @@ fun MainMapScreen(
     var currentRenderedFestival by remember { mutableStateOf("") }
     var currentOverlayState by remember { mutableStateOf(true) }
 
+    var overlayOpacity by remember { mutableFloatStateOf(0.65f) }
+    var currentRenderedOpacity by remember { mutableFloatStateOf(0.65f) }
+
     var showNoteDialog by remember { mutableStateOf(false) }
     var currentNoteText by remember { mutableStateOf("") }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+
+    var longPressLocation by remember { mutableStateOf<Point?>(null) }
 
     var partyExpanded by remember { mutableStateOf(false) }
     var festivalExpanded by remember { mutableStateOf(false) }
@@ -1532,7 +1825,11 @@ fun MainMapScreen(
 
     if (showNoteDialog) {
         AlertDialog(
-            onDismissRequest = { showNoteDialog = false },
+            onDismissRequest = {
+                showNoteDialog = false
+                longPressLocation = null
+                currentNoteText = ""
+            },
             title = { Text("Add a Note") },
             text = {
                 OutlinedTextField(
@@ -1543,17 +1840,32 @@ fun MainMapScreen(
             confirmButton = {
                 Button(onClick = {
                     showNoteDialog = false
-                    (context as MainActivity).grabHardwareLocationAndSave(
-                        currentNoteText,
-                        activeParty
-                    )
+                    if (longPressLocation != null) {
+                        viewModel.saveLocationToDatabase(
+                            lat = longPressLocation!!.latitude(),
+                            lng = longPressLocation!!.longitude(),
+                            note = currentNoteText,
+                            activePartyName = activeParty
+                        )
+                        Toast.makeText(context, "Custom Pin Dropped!", Toast.LENGTH_SHORT).show()
+                        longPressLocation = null
+                    } else {
+                        (context as MainActivity).grabHardwareLocationAndSave(
+                            currentNoteText,
+                            activeParty
+                        )
+                    }
                     currentNoteText = ""
                 }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) {
                     Text("Save Pin")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showNoteDialog = false }) {
+                TextButton(onClick = {
+                    showNoteDialog = false
+                    longPressLocation = null
+                    currentNoteText = ""
+                }) {
                     Text("Cancel", color = stageKeeperPurple)
                 }
             })
@@ -1683,6 +1995,16 @@ fun MainMapScreen(
                 }
                 Text("StageKeeper", color = stageKeeperPurple, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Row {
+                    TextButton(
+                        onClick = onNavigateLineup,
+                        enabled = activeFestival != "Select Festival"
+                    ) {
+                        Text(
+                            "Lineup",
+                            color = if (activeFestival != "Select Festival") stageKeeperPurple else Color.DarkGray,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     TextButton(onClick = onNavigateChat) {
                         Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
                     }
@@ -1847,6 +2169,12 @@ fun MainMapScreen(
                             style.addImage("red_dot", redDotBitmap)
                         }
                         annotationManager = annotations.createPointAnnotationManager()
+
+                        gestures.addOnMapLongClickListener { point ->
+                            longPressLocation = point
+                            showNoteDialog = true
+                            true
+                        }
                     }
                 },
                 update = { view ->
@@ -1856,10 +2184,12 @@ fun MainMapScreen(
 
                     val festivalChanged = currentRenderedFestival != activeFest
                     val overlayChanged = currentOverlayState != overlayVisible
+                    val opacityChanged = currentRenderedOpacity != overlayOpacity
 
                     if (festivalChanged || overlayChanged) {
                         currentRenderedFestival = activeFest
                         currentOverlayState = overlayVisible
+                        currentRenderedOpacity = overlayOpacity
 
                         if (activeFest == "Select Festival") {
                             if (festivalChanged) {
@@ -1883,9 +2213,12 @@ fun MainMapScreen(
 
                             // ONLY reposition camera if the festival itself actually changed
                             if (festivalChanged) {
-                                festivalObj?.center?.let { point ->
+                                festivalObj?.let { fest ->
                                     view.mapboxMap.setCamera(
-                                        CameraOptions.Builder().center(point).zoom(14.5).build()
+                                        CameraOptions.Builder()
+                                            .center(fest.center)
+                                            .zoom(fest.defaultZoom)
+                                            .build()
                                     )
                                 }
                             }
@@ -1916,21 +2249,35 @@ fun MainMapScreen(
                                                 url("file://${tempFile.absolutePath}")
                                             }
                                         )
-                                        mapStyle.addLayer(
-                                            rasterLayer("festival-overlay-layer", "festival-overlay-source") {
-                                                rasterOpacity(0.45) // 45% transparency
-                                            }
-                                        )
+
+                                        val rasterLayerExt = rasterLayer("festival-overlay-layer", "festival-overlay-source") {
+                                            rasterOpacity(overlayOpacity.toDouble())
+                                        }
+
+                                        if (mapStyle.styleLayerExists("waterway-label")) {
+                                            mapStyle.addLayerBelow(rasterLayerExt, "waterway-label")
+                                        } else {
+                                            mapStyle.addLayer(rasterLayerExt)
+                                        }
                                     } else {
                                         Toast.makeText(context, "Could not find image for $activeFest", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
                         }
+                    } else if (opacityChanged) {
+                        currentRenderedOpacity = overlayOpacity
+                        view.mapboxMap.getStyle { style ->
+                            val layer = style.getLayerAs<RasterLayer>("festival-overlay-layer")
+                            layer?.rasterOpacity(overlayOpacity.toDouble())
+                        }
                     }
 
                     annotationManager?.let { manager ->
                         manager.deleteAll()
+                        // Dynamically switch text color based on opacity: Black at 0%, Light Gray above 0%
+                        val pinTextColor = if (overlayOpacity <= 0.05f) AndroidColor.BLACK else AndroidColor.WHITE
+
                         val optionsList = currentLocs.map { loc ->
                             PointAnnotationOptions().withPoint(
                                 Point.fromLngLat(
@@ -1938,7 +2285,7 @@ fun MainMapScreen(
                                     loc.latitude
                                 )
                             ).withIconImage("red_dot").withTextField(loc.note)
-                                .withTextOffset(listOf(0.0, 1.5)).withTextColor(AndroidColor.BLACK)
+                                .withTextOffset(listOf(0.0, 1.5)).withTextColor(pinTextColor)
                         }
                         manager.create(optionsList)
                     }
@@ -1946,24 +2293,34 @@ fun MainMapScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // FLOATING BUTTON: Toggle Map Overlay
-            if (activeFestival != "Select Festival") {
-                FloatingActionButton(
-                    onClick = { showMapOverlay = !showMapOverlay },
-                    containerColor = if (showMapOverlay) stageKeeperPurple else Color.DarkGray,
-                    contentColor = Color.White,
+            // FLOATING UI: Slider to isolate the map opacity
+            if (activeFestival != "Select Festival" && showMapOverlay) {
+                Column(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
+                        .align(Alignment.TopEnd)
+                        .padding(top = 16.dp, end = 16.dp)
+                        .background(Color(0xCC000000), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .width(140.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (showMapOverlay) Icons.Default.Layers else Icons.Default.LayersClear,
-                            contentDescription = "Toggle Overlay"
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (showMapOverlay) "Hide Map" else "Show Map", fontWeight = FontWeight.Bold)
-                    }
+                    Text("Map Opacity", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Slider(
+                        value = overlayOpacity,
+                        onValueChange = { overlayOpacity = it },
+                        valueRange = 0.0f..1.0f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = stageKeeperPurple,
+                            activeTrackColor = stageKeeperPurple,
+                            inactiveTrackColor = Color.DarkGray
+                        ),
+                        modifier = Modifier.height(30.dp)
+                    )
+                    Text(
+                        text = if (overlayOpacity >= 0.98f) "Map Isolated" else "Street Blend",
+                        color = stageKeeperBlue,
+                        fontSize = 10.sp
+                    )
                 }
             }
         }
@@ -1983,7 +2340,7 @@ fun MainMapScreen(
                     .weight(1f)
                     .padding(end = 8.dp),
                 shape = RoundedCornerShape(8.dp)
-            ) { Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White) }
+            ) { Text("Drop Pin Where You Are", fontWeight = FontWeight.Bold, color = Color.White) }
             Button(
                 onClick = { showClearConfirmDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
@@ -1992,6 +2349,218 @@ fun MainMapScreen(
                     .padding(start = 8.dp),
                 shape = RoundedCornerShape(8.dp)
             ) { Text("Clear Pins", fontWeight = FontWeight.Bold, color = Color.White) }
+        }
+    }
+}
+
+// ==========================================
+// LINEUP & SET SCHEDULE SCREEN
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LineupScreen(
+    activeFestival: String,
+    onNavigateBack: () -> Unit
+) {
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
+    val stageKeeperBlue = Color(0xFF00BFFF)
+
+    val sets = festivalLineupsDatabase[activeFestival] ?: emptyList()
+
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedDay by remember { mutableStateOf("All") }
+    var selectedStage by remember { mutableStateOf("All") }
+    var showOnlyBookmarked by remember { mutableStateOf(false) }
+
+    // Persistent bookmark set for favorite artists
+    var bookmarkedSets by remember { mutableStateOf(setOf<String>()) }
+
+    val days = remember(sets) { listOf("All") + sets.map { it.day }.distinct() }
+    val stages = remember(sets) { listOf("All") + sets.map { it.stage }.distinct() }
+
+    val filteredSets = sets.filter { set ->
+        val matchesSearch = searchQuery.isBlank() ||
+                set.artistName.contains(searchQuery, ignoreCase = true) ||
+                set.genre.contains(searchQuery, ignoreCase = true)
+        val matchesDay = selectedDay == "All" || set.day == selectedDay
+        val matchesStage = selectedStage == "All" || set.stage == selectedStage
+        val matchesBookmark = !showOnlyBookmarked || bookmarkedSets.contains(set.artistName)
+
+        matchesSearch && matchesDay && matchesStage && matchesBookmark
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(stageKeeperDark)
+            .systemBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        // Top Navigation Row
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onNavigateBack) {
+                Text("Back", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                text = if (activeFestival != "Select Festival") activeFestival else "Festival Lineups",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = { showOnlyBookmarked = !showOnlyBookmarked }) {
+                Icon(
+                    imageVector = if (showOnlyBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                    contentDescription = "Show Bookmarked",
+                    tint = if (showOnlyBookmarked) stageKeeperPurple else Color.LightGray
+                )
+            }
+        }
+
+        if (sets.isEmpty()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Schedule TBA",
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "No lineup information is available for $activeFestival at this time.\nCheck back later!",
+                        color = Color.LightGray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.LightGray) },
+                placeholder = { Text("Search artist or genre...", color = Color.Gray) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = stageKeeperPurple,
+                    unfocusedBorderColor = Color.DarkGray
+                ),
+                shape = RoundedCornerShape(12.dp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Day Selector Chips
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(days) { day ->
+                    FilterChip(
+                        selected = selectedDay == day,
+                        onClick = { selectedDay = day },
+                        label = { Text(day, fontWeight = FontWeight.Bold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = stageKeeperPurple,
+                            selectedLabelColor = Color.White,
+                            containerColor = Color(0xFF1A1A1A),
+                            labelColor = Color.LightGray
+                        )
+                    )
+                }
+            }
+
+            // Stage Filter Chips
+            if (stages.size > 2) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(stages) { stage ->
+                        FilterChip(
+                            selected = selectedStage == stage,
+                            onClick = { selectedStage = stage },
+                            label = { Text(stage, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = stageKeeperBlue,
+                                selectedLabelColor = Color.Black,
+                                containerColor = Color(0xFF1A1A1A),
+                                labelColor = Color.LightGray
+                            )
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Lineup Cards List
+            if (filteredSets.isEmpty()) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No sets match your filters.", color = Color.DarkGray, fontSize = 16.sp)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredSets) { set ->
+                        val isBookmarked = bookmarkedSets.contains(set.artistName)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(set.artistName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(set.stage, color = stageKeeperBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                        if (set.startTime.isNotBlank() && set.endTime.isNotBlank()) {
+                                            Text(" • ", color = Color.DarkGray)
+                                            Text("${set.startTime} - ${set.endTime}", color = Color.LightGray, fontSize = 13.sp)
+                                        }
+                                    }
+                                    if (set.genre.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(set.genre, color = Color.Gray, fontSize = 12.sp)
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        bookmarkedSets = if (isBookmarked) {
+                                            bookmarkedSets - set.artistName
+                                        } else {
+                                            bookmarkedSets + set.artistName
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                        contentDescription = "Bookmark Set",
+                                        tint = if (isBookmarked) stageKeeperPurple else Color.DarkGray
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
