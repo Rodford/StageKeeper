@@ -228,7 +228,7 @@ data class FestivalData(
     val name: String,
     val dates: String,
     val center: Point,
-    val defaultZoom: Double = 14.5,
+    val defaultZoom: Double = 14.5, // Control initial camera zoom per festival
     val imageName: String,
     val imageCoordinates: List<List<Double>>
 )
@@ -770,12 +770,28 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun StageKeeperAppNavigation(viewModel: MapViewModel) {
-    // State to track which screen we are currently viewing
+    val context = LocalContext.current
+    val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
+
+    // Grab the current user so we can tie their data to their account
+    val currentUser by viewModel.currentUser.collectAsState()
+
     var currentScreen by remember { mutableStateOf(AppScreen.Splash) }
+    var previousScreen by remember { mutableStateOf(AppScreen.Setup) }
 
     // Keeping these globally so the map screen knows exactly what festival and party the user picked
     var userParty by remember { mutableStateOf("Select Party") }
     var userFestival by remember { mutableStateOf("Select Festival") }
+
+    // Create a unique save key based on who is logged in
+    val bookmarkKey = "bookmarked_sets_${currentUser?.userId ?: "guest"}"
+
+    // The 'remember(bookmarkKey)' tells Compose to reload this data whenever a new user logs in
+    var globalBookmarkedSets by remember(bookmarkKey) {
+        mutableStateOf(
+            sharedPrefs.getStringSet(bookmarkKey, emptySet())?.toSet() ?: emptySet()
+        )
+    }
 
     val availableParties by viewModel.availableParties.collectAsState()
 
@@ -806,10 +822,10 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             },
             selectedFestival = userFestival, onFestivalSelected = { userFestival = it },
             availableParties = availableParties, viewModel = viewModel,
-            onLaunchMap = { currentScreen = AppScreen.Map },
-            onNavigateProfile = { currentScreen = AppScreen.Profile },
-            onNavigateChat = { currentScreen = AppScreen.Chat },
-            onNavigateLineup = { currentScreen = AppScreen.Lineup }
+            onLaunchMap = { previousScreen = currentScreen; currentScreen = AppScreen.Map },
+            onNavigateProfile = { previousScreen = currentScreen; currentScreen = AppScreen.Profile },
+            onNavigateChat = { previousScreen = currentScreen; currentScreen = AppScreen.Chat },
+            onNavigateLineup = { previousScreen = currentScreen; currentScreen = AppScreen.Lineup }
         )
 
         AppScreen.Map -> MainMapScreen(
@@ -823,27 +839,33 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             activeFestival = userFestival,
             onFestivalChange = { userFestival = it },
             availableParties = availableParties,
-            onNavigateHome = { currentScreen = AppScreen.Setup },
-            onNavigateProfile = { currentScreen = AppScreen.Profile },
-            onNavigateChat = { currentScreen = AppScreen.Chat },
-            onNavigateLineup = { currentScreen = AppScreen.Lineup }
+            onNavigateHome = { previousScreen = currentScreen; currentScreen = AppScreen.Setup },
+            onNavigateProfile = { previousScreen = currentScreen; currentScreen = AppScreen.Profile },
+            onNavigateChat = { previousScreen = currentScreen; currentScreen = AppScreen.Chat },
+            onNavigateLineup = { previousScreen = currentScreen; currentScreen = AppScreen.Lineup }
         )
 
         AppScreen.Profile -> ProfileScreen(
             viewModel = viewModel,
-            onNavigateBack = { currentScreen = AppScreen.Setup },
+            onNavigateBack = { currentScreen = previousScreen },
             onLogout = { currentScreen = AppScreen.Login }
         )
 
         AppScreen.Chat -> ChatScreen(
             viewModel = viewModel,
             activeParty = userParty,
-            onNavigateBack = { currentScreen = AppScreen.Setup }
+            onNavigateBack = { currentScreen = previousScreen }
         )
 
         AppScreen.Lineup -> LineupScreen(
             activeFestival = userFestival,
-            onNavigateBack = { currentScreen = AppScreen.Setup }
+            bookmarkedSets = globalBookmarkedSets,
+            onBookmarkChange = { newBookmarks ->
+                // Update the state AND save it directly to the specific user's file
+                globalBookmarkedSets = newBookmarks
+                sharedPrefs.edit().putStringSet(bookmarkKey, newBookmarks).apply()
+            },
+            onNavigateBack = { currentScreen = previousScreen }
         )
     }
 }
@@ -1700,7 +1722,7 @@ fun SetupScreen(
                 TextButton(onClick = {
                     viewModel.leaveParty(selectedParty) { success ->
                         if (success) {
-                            onPartySelected("Select Party")
+                            onPartySelected("Select Festival")
                         }
                     }
                 }) { Text("Leave Crew", color = Color.Red, fontSize = 14.sp) }
@@ -1832,10 +1854,19 @@ fun MainMapScreen(
             },
             title = { Text("Add a Note") },
             text = {
-                OutlinedTextField(
-                    value = currentNoteText,
-                    onValueChange = { currentNoteText = it },
-                    label = { Text("e.g., Meetup spot") })
+                Column {
+                    Text(
+                        "Tip: Long-press anywhere on the map to drop a custom pin at that location, or use the bottom button to drop a pin right where you are.",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = currentNoteText,
+                        onValueChange = { currentNoteText = it },
+                        label = { Text("e.g., Meetup spot / Main Stage") }
+                    )
+                }
             },
             confirmButton = {
                 Button(onClick = {
@@ -1990,11 +2021,18 @@ fun MainMapScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                TextButton(onClick = onNavigateHome) {
-                    Text("Home", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onNavigateHome) {
+                        Text("Home", color = Color(0xFFB388FF), fontWeight = FontWeight.Normal, fontSize = 13.sp)
+                    }
+                    TextButton(onClick = onNavigateChat) {
+                        Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
                 }
-                Text("StageKeeper", color = stageKeeperPurple, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Row {
+
+                Text("StageKeeper", color = stageKeeperPurple, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
                         onClick = onNavigateLineup,
                         enabled = activeFestival != "Select Festival"
@@ -2002,14 +2040,12 @@ fun MainMapScreen(
                         Text(
                             "Lineup",
                             color = if (activeFestival != "Select Festival") stageKeeperPurple else Color.DarkGray,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
                         )
                     }
-                    TextButton(onClick = onNavigateChat) {
-                        Text("Chat", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
-                    }
                     TextButton(onClick = onNavigateProfile) {
-                        Text("Profile", color = stageKeeperPurple, fontWeight = FontWeight.Bold)
+                        Text("Profile", color = stageKeeperPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             }
@@ -2027,7 +2063,7 @@ fun MainMapScreen(
                             value = activeParty,
                             onValueChange = {},
                             readOnly = true,
-                            label = { Text("Party", color = Color.LightGray) },
+                            label = { Text("Party", color = Color(0xFFDDDDDD), fontSize = 12.sp) },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyExpanded) },
                             modifier = Modifier.menuAnchor(),
                             colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
@@ -2035,8 +2071,8 @@ fun MainMapScreen(
                                 unfocusedContainerColor = Color(0xFF1A1A1A),
                                 focusedBorderColor = stageKeeperPurple,
                                 unfocusedBorderColor = Color.Transparent,
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
+                                focusedTextColor = Color(0xFFEEEEEE),
+                                unfocusedTextColor = Color(0xFFEEEEEE)
                             ),
                             shape = RoundedCornerShape(8.dp),
                             singleLine = true
@@ -2062,7 +2098,7 @@ fun MainMapScreen(
                             }, onClick = { partyExpanded = false; showCreatePartyDialog = true })
                             availableParties.forEach { party ->
                                 DropdownMenuItem(
-                                    text = { Text(party.partyName, color = Color.White) },
+                                    text = { Text(party.partyName, color = Color(0xFFEEEEEE)) },
                                     onClick = {
                                         onPartyChange(party.partyName)
                                         partyExpanded = false
@@ -2080,9 +2116,9 @@ fun MainMapScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = "Code: ${activePartyObj.inviteCode}",
-                                    color = stageKeeperBlue,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
+                                    color = Color(0xFFB0E0E6),
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 11.sp,
                                     modifier = Modifier.padding(top = 4.dp, start = 4.dp)
                                 )
                                 TextButton(
@@ -2092,7 +2128,7 @@ fun MainMapScreen(
                                     },
                                     contentPadding = PaddingValues(0.dp),
                                     modifier = Modifier.height(24.dp).padding(start = 8.dp)
-                                ) { Text("Copy", color = Color.LightGray, fontSize = 12.sp) }
+                                ) { Text("Copy", color = Color(0xFFCCCCCC), fontSize = 11.sp) }
                             }
                             TextButton(
                                 onClick = {
@@ -2104,7 +2140,7 @@ fun MainMapScreen(
                                 },
                                 contentPadding = PaddingValues(0.dp),
                                 modifier = Modifier.height(24.dp)
-                            ) { Text("Leave", color = Color.Red, fontSize = 12.sp) }
+                            ) { Text("Leave", color = Color(0xFFFF6B6B), fontSize = 11.sp) }
                         }
                     }
                 }
@@ -2119,7 +2155,7 @@ fun MainMapScreen(
                         value = activeFestival,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Festival", color = Color.LightGray) },
+                        label = { Text("Festival", color = Color(0xFFDDDDDD), fontSize = 12.sp) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = festivalExpanded) },
                         modifier = Modifier.menuAnchor(),
                         colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
@@ -2127,8 +2163,8 @@ fun MainMapScreen(
                             unfocusedContainerColor = Color(0xFF1A1A1A),
                             focusedBorderColor = stageKeeperPurple,
                             unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            focusedTextColor = Color(0xFFEEEEEE),
+                            unfocusedTextColor = Color(0xFFEEEEEE)
                         ),
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
@@ -2142,8 +2178,8 @@ fun MainMapScreen(
                             DropdownMenuItem(
                                 text = {
                                     Column {
-                                        Text(festivalData.name, color = Color.White, fontWeight = FontWeight.Bold)
-                                        Text(festivalData.dates, color = stageKeeperBlue, fontSize = 12.sp)
+                                        Text(festivalData.name, color = Color(0xFFEEEEEE), fontWeight = FontWeight.Bold)
+                                        Text(festivalData.dates, color = Color(0xFFB0E0E6), fontSize = 11.sp)
                                     }
                                 },
                                 onClick = { onFestivalChange(festivalData.name); festivalExpanded = false })
@@ -2340,7 +2376,7 @@ fun MainMapScreen(
                     .weight(1f)
                     .padding(end = 8.dp),
                 shape = RoundedCornerShape(8.dp)
-            ) { Text("Drop Pin Where You Are", fontWeight = FontWeight.Bold, color = Color.White) }
+            ) { Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White) }
             Button(
                 onClick = { showClearConfirmDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
@@ -2360,6 +2396,8 @@ fun MainMapScreen(
 @Composable
 fun LineupScreen(
     activeFestival: String,
+    bookmarkedSets: Set<String>,
+    onBookmarkChange: (Set<String>) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     val stageKeeperDark = Color(0xFF050505)
@@ -2374,8 +2412,6 @@ fun LineupScreen(
     var showOnlyBookmarked by remember { mutableStateOf(false) }
 
     // Persistent bookmark set for favorite artists
-    var bookmarkedSets by remember { mutableStateOf(setOf<String>()) }
-
     val days = remember(sets) { listOf("All") + sets.map { it.day }.distinct() }
     val stages = remember(sets) { listOf("All") + sets.map { it.stage }.distinct() }
 
@@ -2543,11 +2579,12 @@ fun LineupScreen(
                                 }
                                 IconButton(
                                     onClick = {
-                                        bookmarkedSets = if (isBookmarked) {
+                                        val updatedBookmarks = if (isBookmarked) {
                                             bookmarkedSets - set.artistName
                                         } else {
                                             bookmarkedSets + set.artistName
                                         }
+                                        onBookmarkChange(updatedBookmarks)
                                     }
                                 ) {
                                     Icon(
@@ -2633,7 +2670,7 @@ fun ChatScreen(
                 color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.width(48.dp)) // balance layout
+            Spacer(modifier = Modifier.width(48.dp))
         }
 
         // Tabs
