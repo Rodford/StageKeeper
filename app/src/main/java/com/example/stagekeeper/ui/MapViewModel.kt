@@ -15,6 +15,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +39,27 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser
+
+    // --- INACTIVITY TIMER STATE ---
+    private var inactivityJob: Job? = null
+    private val _sessionExpired = MutableStateFlow(false)
+    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+
+    fun resetInactivityTimer() {
+        inactivityJob?.cancel()
+
+        // Only run the timer if the user is actually logged in
+        if (auth.currentUser != null) {
+            inactivityJob = viewModelScope.launch {
+                delay(5 * 60 * 1000L) // 5 minutes in milliseconds
+                _sessionExpired.value = true
+            }
+        }
+    }
+
+    fun clearSessionExpiredFlag() {
+        _sessionExpired.value = false
+    }
 
     // --- CHAT STATES ---
     private val _partyMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -652,6 +675,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         partyChatListener?.remove()
         dmChatListener?.remove()
         turnOffOfflineMesh()
+
+        inactivityJob?.cancel()
+        _sessionExpired.value = false
     }
 
     fun registerUser(user: User, onResult: (Boolean) -> Unit) {

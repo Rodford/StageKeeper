@@ -51,6 +51,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-nearby:19.0.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Room Database
     implementation(libs.room.runtime)
@@ -72,7 +74,7 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     // ---------------------------------
 
-    // NEW: Google Gson for JSON parsing (used in MeshManager to serialize map pins for offline transfer)
+    // Google Gson for JSON parsing (used in MeshManager to serialize map pins for offline transfer)
     implementation("com.google.code.gson:gson:2.10.1")
 
     testImplementation(libs.junit)
