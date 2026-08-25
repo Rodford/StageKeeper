@@ -13,7 +13,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricPrompt
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LayersClear
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -100,8 +102,10 @@ import com.mapbox.maps.plugin.gestures.addOnMapLongClickListener
 import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
-enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat, Lineup }
+enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat, Lineup, Locked }
 
 /*
 // Database of 100 major US music festivals with accurate venue coordinates
@@ -680,7 +684,7 @@ val festivalLineupsDatabase = mapOf(
     )
 )
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private val mapViewModel: MapViewModel by viewModels()
 
@@ -707,6 +711,12 @@ class MainActivity : ComponentActivity() {
         requestPermissionsLauncher.launch(requiredPermissions.toTypedArray())
 
         setContent { StageKeeperAppNavigation(mapViewModel) }
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        // Resets the timer on ANY screen touch or swipe
+        mapViewModel.resetInactivityTimer()
     }
 
     // Requests coordinates from hardware sensors and delegates data to the ViewModel
@@ -766,6 +776,30 @@ class MainActivity : ComponentActivity() {
             e.printStackTrace()
         }
     }
+
+    // --- BIOMETRIC LOGIN LOGIC ---
+    fun authenticateWithBiometrics(onSuccess: () -> Unit, onFail: () -> Unit) {
+        val executor = ContextCompat.getMainExecutor(this)
+        val biometricPrompt = BiometricPrompt(this, executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    onSuccess()
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    onFail()
+                }
+            })
+
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("StageKeeper Secure Unlock")
+            .setSubtitle("Use your fingerprint, face, or screen lock.")
+            .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+            .build()
+
+        biometricPrompt.authenticate(promptInfo)
+    }
 }
 
 @Composable
@@ -778,6 +812,17 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
 
     var currentScreen by remember { mutableStateOf(AppScreen.Splash) }
     var previousScreen by remember { mutableStateOf(AppScreen.Setup) }
+
+    val sessionExpired by viewModel.sessionExpired.collectAsState()
+
+    // SOFT LOCK LISTENER
+    // If the 5 minutes hits, we DO NOT log them out. We just throw the lock screen over the app.
+    LaunchedEffect(sessionExpired) {
+        if (sessionExpired && currentScreen != AppScreen.Login && currentScreen != AppScreen.Splash && currentScreen != AppScreen.Locked) {
+            previousScreen = currentScreen
+            currentScreen = AppScreen.Locked
+        }
+    }
 
     // Keeping these globally so the map screen knows exactly what festival and party the user picked
     var userParty by remember { mutableStateOf("Select Party") }
@@ -812,6 +857,21 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
             viewModel = viewModel,
             onSignUpSuccess = { currentScreen = AppScreen.Login },
             onBackToLogin = { currentScreen = AppScreen.Login })
+
+        // SOFT LOCK ROUTE
+        AppScreen.Locked -> LockedScreen(
+            onUnlock = {
+                viewModel.clearSessionExpiredFlag()
+                viewModel.resetInactivityTimer()
+                // FORCED RESET: Always drop them safely onto the Setup Screen to prevent UI glitches
+                currentScreen = AppScreen.Setup
+            },
+            onLogout = {
+                viewModel.logoutUser()
+                viewModel.clearSessionExpiredFlag()
+                currentScreen = AppScreen.Login
+            }
+        )
 
         AppScreen.Setup -> SetupScreen(
             selectedParty = userParty,
@@ -870,6 +930,114 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     }
 }
 
+// ==========================================
+// SOFT-LOCK SCREEN
+// ==========================================
+@Composable
+fun LockedScreen(
+    onUnlock: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val context = LocalContext.current
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
+
+    val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
+    var showEmergencyDialog by remember { mutableStateOf(false) }
+
+    // Automatically prompt them with the fingerprint scanner the second this screen appears
+    LaunchedEffect(Unit) {
+        (context as MainActivity).authenticateWithBiometrics(
+            onSuccess = { onUnlock() },
+            onFail = { /* Do nothing, let them click the manual unlock button to try again */ }
+        )
+    }
+
+    if (showEmergencyDialog) {
+        val emContact = sharedPrefs.getString("em_contact", "No contact provided.")
+        val emMedical = sharedPrefs.getString("em_medical", "No medical info provided.")
+
+        AlertDialog(
+            onDismissRequest = { showEmergencyDialog = false },
+            icon = { Icon(Icons.Default.Warning, contentDescription = "Emergency", tint = Color.Red) },
+            title = { Text("Emergency Information") },
+            text = {
+                Column {
+                    Text("Emergency Contact:", fontWeight = FontWeight.Bold, color = stageKeeperPurple)
+                    Text(emContact ?: "", color = Color.White)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Medical Info:", fontWeight = FontWeight.Bold, color = stageKeeperPurple)
+                    Text(emMedical ?: "", color = Color.White)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showEmergencyDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+                ) { Text("Close", color = Color.White) }
+            },
+            containerColor = Color(0xFF1A1A1A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(stageKeeperDark)
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = "Locked",
+            tint = stageKeeperPurple,
+            modifier = Modifier.size(64.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("App Locked", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text("Verify identity to continue", color = Color.LightGray)
+
+        Spacer(modifier = Modifier.height(48.dp))
+
+        Button(
+            onClick = {
+                (context as MainActivity).authenticateWithBiometrics(
+                    onSuccess = { onUnlock() },
+                    onFail = { Toast.makeText(context, "Authentication Failed", Toast.LENGTH_SHORT).show() }
+                )
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
+        ) {
+            Text("Unlock App", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        TextButton(onClick = onLogout) {
+            Text("Log Out Completely", color = Color.Red)
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+
+        // Emergency Info Button
+        Button(
+            onClick = { showEmergencyDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF330000)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = "Emergency", tint = Color.Red)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Emergency Info", color = Color.Red, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
 @Composable
 fun SplashScreen(onSplashComplete: () -> Unit) {
     val splashBackground = Color.Black
@@ -917,9 +1085,28 @@ fun LoginScreen(
     val stageKeeperDark = Color(0xFF050505)
     val stageKeeperPurple = Color(0xFFA644FF)
     val stageKeeperBlue = Color(0xFF00BFFF)
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
 
+    // Standard prefs for Email and Remember Me toggle
+    val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
+
+    // Secure Keystore prefs for the Password
+    val masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    val securePrefs = EncryptedSharedPreferences.create(
+        context,
+        "secure_login_prefs",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    var email by remember { mutableStateOf(sharedPrefs.getString("saved_email", "") ?: "") }
+    var password by remember { mutableStateOf("") } // Always starts blank on the UI
+    var rememberMe by remember { mutableStateOf(sharedPrefs.getBoolean("remember_me", false)) }
+
+    val savedSecurePassword = securePrefs.getString("saved_secure_password", "") ?: ""
     var showEmergencyDialog by remember { mutableStateOf(false) }
 
     val attemptLogin = {
@@ -927,6 +1114,13 @@ fun LoginScreen(
         if (email.isNotBlank() && password.isNotBlank()) {
             viewModel.authenticateUser(email, password) { user ->
                 if (user != null) {
+                    if (rememberMe) {
+                        sharedPrefs.edit().putString("saved_email", email).putBoolean("remember_me", true).apply()
+                        securePrefs.edit().putString("saved_secure_password", password).apply()
+                    } else {
+                        sharedPrefs.edit().remove("saved_email").putBoolean("remember_me", false).apply()
+                        securePrefs.edit().remove("saved_secure_password").apply()
+                    }
                     onLoginSuccess()
                 } else {
                     Toast.makeText(context, "Invalid email or password", Toast.LENGTH_SHORT).show()
@@ -936,7 +1130,6 @@ fun LoginScreen(
     }
 
     if (showEmergencyDialog) {
-        val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
         val emContact = sharedPrefs.getString("em_contact", "No contact provided.")
         val emMedical = sharedPrefs.getString("em_medical", "No medical info provided.")
 
@@ -959,9 +1152,7 @@ fun LoginScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
                 ) { Text("Close", color = Color.White) }
             },
-            containerColor = Color(0xFF1A1A1A),
-            titleContentColor = Color.White,
-            textContentColor = Color.White
+            containerColor = Color(0xFF1A1A1A)
         )
     }
 
@@ -974,82 +1165,93 @@ fun LoginScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            "StageKeeper",
-            color = stageKeeperPurple,
-            fontSize = 42.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            "Find your crew.",
-            color = stageKeeperBlue,
-            fontSize = 16.sp
-        )
+        Text("StageKeeper", color = stageKeeperPurple, fontSize = 42.sp, fontWeight = FontWeight.Bold)
+        Text("Find your crew.", color = stageKeeperBlue, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(48.dp))
+
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
             label = { Text("Email", color = Color.LightGray) },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Email,
-                imeAction = ImeAction.Next
-            ),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = stageKeeperPurple,
-                unfocusedBorderColor = Color.DarkGray
+                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
         Spacer(modifier = Modifier.height(16.dp))
+
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
             label = { Text("Password", color = Color.LightGray) },
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { attemptLogin() }),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = stageKeeperPurple,
-                unfocusedBorderColor = Color.DarkGray
+                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
             ),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
-        Spacer(modifier = Modifier.height(48.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = rememberMe,
+                    onCheckedChange = { rememberMe = it },
+                    colors = CheckboxDefaults.colors(checkedColor = stageKeeperPurple, checkmarkColor = Color.White)
+                )
+                Text("Remember Me", color = Color.LightGray, fontSize = 14.sp)
+            }
+
+            // BIOMETRIC BUTTON: Only shows if a secure password is found in the Keystore
+            if (email.isNotBlank() && savedSecurePassword.isNotBlank()) {
+                IconButton(onClick = {
+                    (context as MainActivity).authenticateWithBiometrics(
+                        onSuccess = {
+                            // Biometric passed, use the Keystore password to login behind the scenes
+                            viewModel.authenticateUser(email, savedSecurePassword) { user ->
+                                if (user != null) onLoginSuccess()
+                                else Toast.makeText(context, "Session expired, please re-type password.", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        onFail = { Toast.makeText(context, "Biometric Auth Failed", Toast.LENGTH_SHORT).show() }
+                    )
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = "Biometric Login",
+                        tint = stageKeeperPurple,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
         Button(
             onClick = { attemptLogin() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
             shape = RoundedCornerShape(8.dp),
             enabled = email.isNotBlank() && password.isNotBlank()
         ) {
-            Text(
-                "Login",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+            Text("Login", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
         Spacer(modifier = Modifier.height(16.dp))
         TextButton(onClick = onNavigateToSignUp) {
-            Text(
-                "Don't have an account? Sign Up",
-                color = stageKeeperBlue
-            )
+            Text("Don't have an account? Sign Up", color = stageKeeperBlue)
         }
 
         Spacer(modifier = Modifier.height(32.dp))
-
         Button(
             onClick = { showEmergencyDialog = true },
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF330000)),
@@ -2376,7 +2578,7 @@ fun MainMapScreen(
                     .weight(1f)
                     .padding(end = 8.dp),
                 shape = RoundedCornerShape(8.dp)
-            ) { Text("Drop Pin", fontWeight = FontWeight.Bold, color = Color.White) }
+            ) { Text("Drop Pin Where You Are", fontWeight = FontWeight.Bold, color = Color.White) }
             Button(
                 onClick = { showClearConfirmDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
@@ -2406,10 +2608,10 @@ fun LineupScreen(
 
     val sets = festivalLineupsDatabase[activeFestival] ?: emptyList()
 
+    var selectedTab by remember { mutableStateOf("Full Lineup") }
     var searchQuery by remember { mutableStateOf("") }
     var selectedDay by remember { mutableStateOf("All") }
     var selectedStage by remember { mutableStateOf("All") }
-    var showOnlyBookmarked by remember { mutableStateOf(false) }
 
     // Persistent bookmark set for favorite artists
     val days = remember(sets) { listOf("All") + sets.map { it.day }.distinct() }
@@ -2421,9 +2623,8 @@ fun LineupScreen(
                 set.genre.contains(searchQuery, ignoreCase = true)
         val matchesDay = selectedDay == "All" || set.day == selectedDay
         val matchesStage = selectedStage == "All" || set.stage == selectedStage
-        val matchesBookmark = !showOnlyBookmarked || bookmarkedSets.contains(set.artistName)
 
-        matchesSearch && matchesDay && matchesStage && matchesBookmark
+        matchesSearch && matchesDay && matchesStage
     }
 
     Column(
@@ -2448,13 +2649,7 @@ fun LineupScreen(
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
-            IconButton(onClick = { showOnlyBookmarked = !showOnlyBookmarked }) {
-                Icon(
-                    imageVector = if (showOnlyBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                    contentDescription = "Show Bookmarked",
-                    tint = if (showOnlyBookmarked) stageKeeperPurple else Color.LightGray
-                )
-            }
+            Spacer(modifier = Modifier.width(48.dp)) // Balance the layout
         }
 
         if (sets.isEmpty()) {
@@ -2463,135 +2658,130 @@ fun LineupScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Schedule TBA",
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Schedule TBA", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "No lineup information is available for $activeFestival at this time.\nCheck back later!",
-                        color = Color.LightGray,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center
-                    )
+                    Text("No lineup information is available for $activeFestival at this time.\nCheck back later!", color = Color.LightGray, fontSize = 14.sp, textAlign = TextAlign.Center)
                 }
             }
         } else {
-            // Search Bar
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.LightGray) },
-                placeholder = { Text("Search artist or genre...", color = Color.Gray) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = stageKeeperPurple,
-                    unfocusedBorderColor = Color.DarkGray
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
+            // TABS: Full Lineup vs My Schedule
+            Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(
+                    onClick = { selectedTab = "Full Lineup" },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "Full Lineup") stageKeeperPurple else Color.DarkGray),
+                    modifier = Modifier.weight(1f).padding(end = 4.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) { Text("Full Lineup", color = Color.White) }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Day Selector Chips
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(days) { day ->
-                    FilterChip(
-                        selected = selectedDay == day,
-                        onClick = { selectedDay = day },
-                        label = { Text(day, fontWeight = FontWeight.Bold) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = stageKeeperPurple,
-                            selectedLabelColor = Color.White,
-                            containerColor = Color(0xFF1A1A1A),
-                            labelColor = Color.LightGray
-                        )
-                    )
-                }
+                Button(
+                    onClick = { selectedTab = "My Schedule" },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "My Schedule") stageKeeperPurple else Color.DarkGray),
+                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) { Text("My Schedule", color = Color.White) }
             }
 
-            // Stage Filter Chips
-            if (stages.size > 2) {
-                Spacer(modifier = Modifier.height(8.dp))
+            if (selectedTab == "Full Lineup") {
+                // Search Bar
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.LightGray) },
+                    placeholder = { Text("Search artist or genre...", color = Color.Gray) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = stageKeeperPurple,
+                        unfocusedBorderColor = Color.DarkGray
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Day Selector Chips
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(stages) { stage ->
+                    items(days) { day ->
                         FilterChip(
-                            selected = selectedStage == stage,
-                            onClick = { selectedStage = stage },
-                            label = { Text(stage, fontSize = 12.sp) },
+                            selected = selectedDay == day,
+                            onClick = { selectedDay = day },
+                            label = { Text(day, fontWeight = FontWeight.Bold) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = stageKeeperBlue,
-                                selectedLabelColor = Color.Black,
+                                selectedContainerColor = stageKeeperPurple,
+                                selectedLabelColor = Color.White,
                                 containerColor = Color(0xFF1A1A1A),
                                 labelColor = Color.LightGray
                             )
                         )
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                // Stage Filter Chips
+                if (stages.size > 2) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(stages) { stage ->
+                            FilterChip(
+                                selected = selectedStage == stage,
+                                onClick = { selectedStage = stage },
+                                label = { Text(stage, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = stageKeeperBlue,
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color(0xFF1A1A1A),
+                                    labelColor = Color.LightGray
+                                )
+                            )
+                        }
+                    }
+                }
 
-            // Lineup Cards List
-            if (filteredSets.isEmpty()) {
-                Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("No sets match your filters.", color = Color.DarkGray, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Lineup Cards List
+                if (filteredSets.isEmpty()) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("No sets match your filters.", color = Color.DarkGray, fontSize = 16.sp)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(filteredSets) { set ->
+                            val isBookmarked = bookmarkedSets.contains(set.artistName)
+                            SetCard(set, isBookmarked, stageKeeperPurple, stageKeeperBlue) {
+                                val updatedBookmarks = if (isBookmarked) bookmarkedSets - set.artistName else bookmarkedSets + set.artistName
+                                onBookmarkChange(updatedBookmarks)
+                            }
+                        }
+                    }
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(filteredSets) { set ->
-                        val isBookmarked = bookmarkedSets.contains(set.artistName)
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(set.artistName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(set.stage, color = stageKeeperBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                        if (set.startTime.isNotBlank() && set.endTime.isNotBlank()) {
-                                            Text(" • ", color = Color.DarkGray)
-                                            Text("${set.startTime} - ${set.endTime}", color = Color.LightGray, fontSize = 13.sp)
-                                        }
-                                    }
-                                    if (set.genre.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(set.genre, color = Color.Gray, fontSize = 12.sp)
-                                    }
-                                }
-                                IconButton(
-                                    onClick = {
-                                        val updatedBookmarks = if (isBookmarked) {
-                                            bookmarkedSets - set.artistName
-                                        } else {
-                                            bookmarkedSets + set.artistName
-                                        }
-                                        onBookmarkChange(updatedBookmarks)
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                        contentDescription = "Bookmark Set",
-                                        tint = if (isBookmarked) stageKeeperPurple else Color.DarkGray
-                                    )
+                // MY SCHEDULE TAB LOGIC
+                val mySchedule = sets.filter { bookmarkedSets.contains(it.artistName) }
+                    .sortedBy { parseTimeToMinutes(it.startTime) }
+                    .groupBy { it.day }
+
+                if (mySchedule.isEmpty()) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("No sets bookmarked yet.", color = Color.DarkGray, fontSize = 16.sp)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Iterate through the grouped days in the schedule
+                        mySchedule.forEach { (day, dailySets) ->
+                            item {
+                                Text(
+                                    text = day,
+                                    color = stageKeeperBlue,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                                )
+                            }
+                            items(dailySets) { set ->
+                                SetCard(set, true, stageKeeperPurple, stageKeeperBlue) {
+                                    onBookmarkChange(bookmarkedSets - set.artistName)
                                 }
                             }
                         }
@@ -2599,6 +2789,73 @@ fun LineupScreen(
                 }
             }
         }
+    }
+}
+
+// Reusable Composable for the Artist Card
+@Composable
+fun SetCard(
+    set: FestivalSet,
+    isBookmarked: Boolean,
+    stageKeeperPurple: Color,
+    stageKeeperBlue: Color,
+    onBookmarkToggle: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(set.artistName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(set.stage, color = stageKeeperBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (set.startTime.isNotBlank() && set.endTime.isNotBlank()) {
+                        Text(" • ", color = Color.DarkGray)
+                        Text("${set.startTime} - ${set.endTime}", color = Color.LightGray, fontSize = 13.sp)
+                    }
+                }
+                if (set.genre.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(set.genre, color = Color.Gray, fontSize = 12.sp)
+                }
+            }
+            IconButton(onClick = onBookmarkToggle) {
+                Icon(
+                    imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                    contentDescription = "Bookmark Set",
+                    tint = if (isBookmarked) stageKeeperPurple else Color.DarkGray
+                )
+            }
+        }
+    }
+}
+
+// Helper function to mathematically sort the schedule times correctly
+fun parseTimeToMinutes(timeStr: String): Int {
+    if (timeStr.isBlank()) return 0
+    try {
+        val parts = timeStr.split(" ")
+        val timeParts = parts[0].split(":")
+        var hours = timeParts[0].toInt()
+        val minutes = timeParts[1].toInt()
+        val amPm = parts.getOrNull(1) ?: ""
+
+        if (amPm.equals("PM", true) && hours != 12) hours += 12
+        if (amPm.equals("AM", true) && hours == 12) hours = 0
+
+        // Pushes after-midnight sets (like 1:00 AM) to the END of the night for sorting
+        if (hours < 6) hours += 24
+
+        return hours * 60 + minutes
+    } catch (e: Exception) {
+        return 0
     }
 }
 
