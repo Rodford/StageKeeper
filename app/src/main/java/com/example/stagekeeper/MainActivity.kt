@@ -20,6 +20,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.view.ContextThemeWrapper
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.CustomCredential
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -105,7 +111,7 @@ import java.io.FileOutputStream
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-enum class AppScreen { Splash, Login, SignUp, Setup, Map, Profile, Chat, Lineup, Locked }
+enum class AppScreen { Splash, Login, SignUp, GoogleSignUp, Setup, Map, Profile, Chat, Lineup, Locked }
 
 /*
 // Database of 100 major US music festivals with accurate venue coordinates
@@ -818,7 +824,7 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     // SOFT LOCK LISTENER
     // If the 5 minutes hits, we DO NOT log them out. We just throw the lock screen over the app.
     LaunchedEffect(sessionExpired) {
-        if (sessionExpired && currentScreen != AppScreen.Login && currentScreen != AppScreen.Splash && currentScreen != AppScreen.Locked) {
+        if (sessionExpired && currentScreen != AppScreen.Login && currentScreen != AppScreen.Splash && currentScreen != AppScreen.GoogleSignUp && currentScreen != AppScreen.Locked) {
             previousScreen = currentScreen
             currentScreen = AppScreen.Locked
         }
@@ -841,24 +847,43 @@ fun StageKeeperAppNavigation(viewModel: MapViewModel) {
     val availableParties by viewModel.availableParties.collectAsState()
 
     when (currentScreen) {
-        AppScreen.Splash -> SplashScreen(onSplashComplete = {
-            if (viewModel.isUserLoggedIn()) {
-                currentScreen = AppScreen.Setup
-            } else {
-                currentScreen = AppScreen.Login
+        AppScreen.Splash -> SplashScreen(
+            viewModel = viewModel,
+            onSplashComplete = { isLoggedIn, missingProfile ->
+                if (isLoggedIn) {
+                    if (missingProfile) {
+                        currentScreen = AppScreen.GoogleSignUp
+                    } else {
+                        previousScreen = AppScreen.Setup
+                        currentScreen = AppScreen.Locked
+                    }
+                } else {
+                    currentScreen = AppScreen.Login
+                }
             }
-        })
+        )
+
         AppScreen.Login -> LoginScreen(
             viewModel = viewModel,
             onLoginSuccess = { currentScreen = AppScreen.Setup },
-            onNavigateToSignUp = { currentScreen = AppScreen.SignUp })
+            onNavigateToSignUp = { currentScreen = AppScreen.SignUp },
+            onGoogleSignUpNeeded = { currentScreen = AppScreen.GoogleSignUp }
+        )
 
         AppScreen.SignUp -> SignUpScreen(
             viewModel = viewModel,
             onSignUpSuccess = { currentScreen = AppScreen.Login },
             onBackToLogin = { currentScreen = AppScreen.Login })
 
-        // SOFT LOCK ROUTE
+        AppScreen.GoogleSignUp -> GoogleSignUpScreen(
+            viewModel = viewModel,
+            onProfileComplete = { currentScreen = AppScreen.Setup },
+            onCancel = {
+                viewModel.logoutUser()
+                currentScreen = AppScreen.Login
+            }
+        )
+
         AppScreen.Locked -> LockedScreen(
             onUnlock = {
                 viewModel.clearSessionExpiredFlag()
@@ -1039,10 +1064,17 @@ fun LockedScreen(
 }
 
 @Composable
-fun SplashScreen(onSplashComplete: () -> Unit) {
+fun SplashScreen(viewModel: MapViewModel, onSplashComplete: (isLoggedIn: Boolean, missingProfile: Boolean) -> Unit) {
     val splashBackground = Color.Black
     val stageKeeperPurple = Color(0xFFA644FF)
-    LaunchedEffect(Unit) { delay(2500); onSplashComplete() }
+
+    LaunchedEffect(Unit) {
+        delay(2500)
+        viewModel.checkAuthStatus { isLoggedIn, missingProfile ->
+            onSplashComplete(isLoggedIn, missingProfile)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1078,10 +1110,13 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
 fun LoginScreen(
     viewModel: MapViewModel,
     onLoginSuccess: () -> Unit,
-    onNavigateToSignUp: () -> Unit
+    onNavigateToSignUp: () -> Unit,
+    onGoogleSignUpNeeded: () -> Unit
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val coroutineScope = rememberCoroutineScope()
+
     val stageKeeperDark = Color(0xFF050505)
     val stageKeeperPurple = Color(0xFFA644FF)
     val stageKeeperBlue = Color(0xFF00BFFF)
@@ -1089,25 +1124,23 @@ fun LoginScreen(
     // Standard prefs for Email and Remember Me toggle
     val sharedPrefs = context.getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
 
-    // Secure Keystore prefs for the Password
-    val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
+    val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
     val securePrefs = EncryptedSharedPreferences.create(
-        context,
-        "secure_login_prefs",
-        masterKey,
+        context, "secure_login_prefs", masterKey,
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
     var email by remember { mutableStateOf(sharedPrefs.getString("saved_email", "") ?: "") }
-    var password by remember { mutableStateOf("") } // Always starts blank on the UI
+    var password by remember { mutableStateOf("") }
     var rememberMe by remember { mutableStateOf(sharedPrefs.getBoolean("remember_me", false)) }
 
     val savedSecurePassword = securePrefs.getString("saved_secure_password", "") ?: ""
     var showEmergencyDialog by remember { mutableStateOf(false) }
+
+    var showForgotEmailDialog by remember { mutableStateOf(false) }
+    var showForgotPasswordDialog by remember { mutableStateOf(false) }
+    var recoveryInput by remember { mutableStateOf("") }
 
     val attemptLogin = {
         focusManager.clearFocus()
@@ -1125,6 +1158,44 @@ fun LoginScreen(
                 } else {
                     Toast.makeText(context, "Invalid email or password", Toast.LENGTH_SHORT).show()
                 }
+            }
+        }
+    }
+
+    val launchGoogleSignIn = {
+        coroutineScope.launch {
+            try {
+                val credentialManager = CredentialManager.create(context)
+
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId("1093828442785-qourk5ejmne3cjskqaf91bbqie4v6hpt.apps.googleusercontent.com") // Make sure your Web Client ID is still here!
+                    .setAutoSelectEnabled(true)
+                    .build()
+
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+
+                val result = credentialManager.getCredential(context, request)
+                val credential = result.credential
+
+                if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+
+                    viewModel.authenticateWithGoogle(googleIdTokenCredential.idToken) { success, isNewUser, msg ->
+                        if (success) {
+                            if (isNewUser) onGoogleSignUpNeeded() else onLoginSuccess()
+                        } else {
+                            // Shows if Firebase rejects the token
+                            Toast.makeText(context, "Firebase Error: $msg", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // THIS WILL SHOW US EXACTLY WHY IT IS FAILING!
+                Toast.makeText(context, "Google Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -1147,10 +1218,88 @@ fun LoginScreen(
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = { showEmergencyDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)
-                ) { Text("Close", color = Color.White) }
+                Button(onClick = { showEmergencyDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) { Text("Close", color = Color.White) }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
+    }
+
+    if (showForgotEmailDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgotEmailDialog = false; recoveryInput = "" },
+            title = { Text("Recover Email", color = stageKeeperPurple) },
+            text = {
+                Column {
+                    Text("Enter your @username or Phone Number to find your account.", color = Color.LightGray, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = recoveryInput,
+                        onValueChange = { recoveryInput = it.filterNot { char -> char.isWhitespace() } },
+                        label = { Text("Username or Phone", color = Color.Gray) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = stageKeeperPurple,
+                            unfocusedBorderColor = Color.DarkGray
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (recoveryInput.isNotBlank()) {
+                        viewModel.recoverEmail(recoveryInput) { success, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            if (success) { showForgotEmailDialog = false; recoveryInput = "" }
+                        }
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) { Text("Search", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForgotEmailDialog = false; recoveryInput = "" }) { Text("Cancel", color = stageKeeperPurple) }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
+    }
+
+    if (showForgotPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgotPasswordDialog = false; recoveryInput = "" },
+            title = { Text("Reset Password", color = stageKeeperPurple) },
+            text = {
+                Column {
+                    Text("Enter your email address and we will send you a reset link.", color = Color.LightGray, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = recoveryInput,
+                        onValueChange = { recoveryInput = it.filterNot { char -> char.isWhitespace() } },
+                        label = { Text("Email Address", color = Color.Gray) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = stageKeeperPurple,
+                            unfocusedBorderColor = Color.DarkGray
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (recoveryInput.isNotBlank()) {
+                        viewModel.resetPassword(recoveryInput) { success, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            if (success) { showForgotPasswordDialog = false; recoveryInput = "" }
+                        }
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple)) { Text("Send Link", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForgotPasswordDialog = false; recoveryInput = "" }) { Text("Cancel", color = stageKeeperPurple) }
             },
             containerColor = Color(0xFF1A1A1A)
         )
@@ -1161,7 +1310,8 @@ fun LoginScreen(
             .fillMaxSize()
             .background(stageKeeperDark)
             .systemBarsPadding()
-            .padding(32.dp),
+            .padding(32.dp)
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -1171,7 +1321,7 @@ fun LoginScreen(
 
         OutlinedTextField(
             value = email,
-            onValueChange = { email = it },
+            onValueChange = { email = it.filterNot { char -> char.isWhitespace() } },
             label = { Text("Email", color = Color.LightGray) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             colors = OutlinedTextFieldDefaults.colors(
@@ -1204,11 +1354,7 @@ fun LoginScreen(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = rememberMe,
-                    onCheckedChange = { rememberMe = it },
-                    colors = CheckboxDefaults.colors(checkedColor = stageKeeperPurple, checkmarkColor = Color.White)
-                )
+                Checkbox(checked = rememberMe, onCheckedChange = { rememberMe = it }, colors = CheckboxDefaults.colors(checkedColor = stageKeeperPurple, checkmarkColor = Color.White))
                 Text("Remember Me", color = Color.LightGray, fontSize = 14.sp)
             }
 
@@ -1225,14 +1371,7 @@ fun LoginScreen(
                         },
                         onFail = { Toast.makeText(context, "Biometric Auth Failed", Toast.LENGTH_SHORT).show() }
                     )
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.AccountCircle,
-                        contentDescription = "Biometric Login",
-                        tint = stageKeeperPurple,
-                        modifier = Modifier.size(40.dp)
-                    )
-                }
+                }) { Icon(imageVector = Icons.Default.AccountCircle, contentDescription = "Biometric Login", tint = stageKeeperPurple, modifier = Modifier.size(40.dp)) }
             }
         }
 
@@ -1246,10 +1385,35 @@ fun LoginScreen(
         ) {
             Text("Login", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
+
         Spacer(modifier = Modifier.height(16.dp))
-        TextButton(onClick = onNavigateToSignUp) {
-            Text("Don't have an account? Sign Up", color = stageKeeperBlue)
+
+        // BRAND NEW GOOGLE SIGN IN BUTTON
+        Button(
+            onClick = { launchGoogleSignIn() },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            // Replace with R.drawable.ic_google if you made the vector file, else leave as is to compile
+            Icon(
+                painter = painterResource(id = R.drawable.ic_google),
+                contentDescription = "Google Logo",
+                tint = Color.Unspecified,
+                modifier = Modifier.size(28.dp).padding(end = 8.dp)
+            )
+            Text("Sign in with Google", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            TextButton(onClick = { showForgotEmailDialog = true }) { Text("Forgot Email?", color = stageKeeperBlue, fontSize = 12.sp) }
+            TextButton(onClick = { showForgotPasswordDialog = true }) { Text("Forgot Password?", color = stageKeeperBlue, fontSize = 12.sp) }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        TextButton(onClick = onNavigateToSignUp) { Text("Don't have an account? Sign Up", color = Color.LightGray) }
 
         Spacer(modifier = Modifier.height(32.dp))
         Button(
@@ -1319,7 +1483,7 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = email,
-            onValueChange = { email = it },
+            onValueChange = { email = it.filterNot { char -> char.isWhitespace() } },
             label = { Text("Email") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -1348,7 +1512,7 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
         Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = username,
-            onValueChange = { username = it },
+            onValueChange = { username = it.filterNot { char -> char.isWhitespace() } },
             label = { Text("Username") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -1425,10 +1589,10 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
         Button(
             onClick = {
                 val newUser = User(
-                    email = email,
+                    email = email.trim(),
                     password = password,
-                    username = username,
-                    displayName = displayName,
+                    username = username.trim().lowercase().removePrefix("@"),
+                    displayName = displayName.trim(),
                     phoneNumber = phone.ifBlank { null },
                     emergencyContact = emergencyContact.ifBlank { null },
                     medicalInfo = medicalInfo.ifBlank { null },
@@ -1461,6 +1625,92 @@ fun SignUpScreen(viewModel: MapViewModel, onSignUpSuccess: () -> Unit, onBackToL
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
+        }
+        Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoogleSignUpScreen(viewModel: MapViewModel, onProfileComplete: () -> Unit, onCancel: () -> Unit) {
+    val context = LocalContext.current
+    val stageKeeperDark = Color(0xFF050505)
+    val stageKeeperPurple = Color(0xFFA644FF)
+
+    val firebaseUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+
+    var username by remember { mutableStateOf("") }
+    var displayName by remember { mutableStateOf(firebaseUser?.displayName ?: "") }
+    var phone by remember { mutableStateOf("") }
+    var emergencyContact by remember { mutableStateOf("") }
+    var medicalInfo by remember { mutableStateOf("") }
+
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(stageKeeperDark)
+            .systemBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 12.dp)
+            .verticalScroll(scrollState),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+            TextButton(onClick = onCancel) { Text("Cancel & Logout", color = Color.Red, fontWeight = FontWeight.Bold) }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Google Setup", color = stageKeeperPurple, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text("Pick a username to finish.", color = Color.LightGray, fontSize = 16.sp)
+        Spacer(modifier = Modifier.height(32.dp))
+
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it.filterNot { char -> char.isWhitespace() } },
+            label = { Text("Username (Required)") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = displayName, onValueChange = { displayName = it }, label = { Text("Display Name (Required)") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        Text("Safety & Festival Details (Optional)", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = phone, onValueChange = { phone = it }, label = { Text("Phone Number") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = emergencyContact, onValueChange = { emergencyContact = it }, label = { Text("Emergency Contact Number") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = medicalInfo, onValueChange = { medicalInfo = it }, label = { Text("Medical Info") }, modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray)
+        )
+        Spacer(modifier = Modifier.height(48.dp))
+
+        Button(
+            onClick = {
+                viewModel.completeGoogleProfile(username, displayName, phone, emergencyContact, medicalInfo) { success, msg ->
+                    if (success) {
+                        Toast.makeText(context, "Account Ready!", Toast.LENGTH_SHORT).show()
+                        onProfileComplete()
+                    } else {
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(56.dp), colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple), shape = RoundedCornerShape(8.dp),
+            enabled = username.isNotBlank() && displayName.isNotBlank()
+        ) {
+            Text("Complete Setup", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
         Spacer(modifier = Modifier.height(32.dp))
     }
@@ -2609,13 +2859,20 @@ fun LineupScreen(
     val sets = festivalLineupsDatabase[activeFestival] ?: emptyList()
 
     var selectedTab by remember { mutableStateOf("Full Lineup") }
+
     var searchQuery by remember { mutableStateOf("") }
     var selectedDay by remember { mutableStateOf("All") }
     var selectedStage by remember { mutableStateOf("All") }
 
-    // Persistent bookmark set for favorite artists
+    var rouletteSet by remember { mutableStateOf<FestivalSet?>(null) }
+    var selectedVibe by remember { mutableStateOf("All") }
+
     val days = remember(sets) { listOf("All") + sets.map { it.day }.distinct() }
     val stages = remember(sets) { listOf("All") + sets.map { it.stage }.distinct() }
+
+    val vibes = remember(sets) {
+        listOf("All") + sets.map { it.genre }.filter { it.isNotBlank() }.distinct()
+    }
 
     val filteredSets = sets.filter { set ->
         val matchesSearch = searchQuery.isBlank() ||
@@ -2664,125 +2921,217 @@ fun LineupScreen(
                 }
             }
         } else {
-            // TABS: Full Lineup vs My Schedule
-            Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(
                     onClick = { selectedTab = "Full Lineup" },
                     colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "Full Lineup") stageKeeperPurple else Color.DarkGray),
-                    modifier = Modifier.weight(1f).padding(end = 4.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(0.dp),
                     shape = RoundedCornerShape(8.dp)
-                ) { Text("Full Lineup", color = Color.White) }
+                ) { Text("Full Lineup", color = Color.White, fontSize = 12.sp) }
 
                 Button(
                     onClick = { selectedTab = "My Schedule" },
                     colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "My Schedule") stageKeeperPurple else Color.DarkGray),
-                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(0.dp),
                     shape = RoundedCornerShape(8.dp)
-                ) { Text("My Schedule", color = Color.White) }
+                ) { Text("My Schedule", color = Color.White, fontSize = 12.sp) }
+
+                Button(
+                    onClick = { selectedTab = "Discover" },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == "Discover") stageKeeperBlue else Color.DarkGray),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(0.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) { Text("Discover", color = if (selectedTab == "Discover") Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             }
 
-            if (selectedTab == "Full Lineup") {
-                // Search Bar
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.LightGray) },
-                    placeholder = { Text("Search artist or genre...", color = Color.Gray) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = stageKeeperPurple,
-                        unfocusedBorderColor = Color.DarkGray
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                )
+            when (selectedTab) {
+                "Full Lineup" -> {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.LightGray) },
+                        placeholder = { Text("Search artist or genre...", color = Color.Gray) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            focusedBorderColor = stageKeeperPurple, unfocusedBorderColor = Color.DarkGray
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Day Selector Chips
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(days) { day ->
-                        FilterChip(
-                            selected = selectedDay == day,
-                            onClick = { selectedDay = day },
-                            label = { Text(day, fontWeight = FontWeight.Bold) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = stageKeeperPurple,
-                                selectedLabelColor = Color.White,
-                                containerColor = Color(0xFF1A1A1A),
-                                labelColor = Color.LightGray
-                            )
-                        )
-                    }
-                }
-
-                // Stage Filter Chips
-                if (stages.size > 2) {
-                    Spacer(modifier = Modifier.height(8.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(stages) { stage ->
+                        items(days) { day ->
                             FilterChip(
-                                selected = selectedStage == stage,
-                                onClick = { selectedStage = stage },
-                                label = { Text(stage, fontSize = 12.sp) },
+                                selected = selectedDay == day, onClick = { selectedDay = day },
+                                label = { Text(day, fontWeight = FontWeight.Bold) },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = stageKeeperBlue,
-                                    selectedLabelColor = Color.Black,
-                                    containerColor = Color(0xFF1A1A1A),
-                                    labelColor = Color.LightGray
+                                    selectedContainerColor = stageKeeperPurple, selectedLabelColor = Color.White,
+                                    containerColor = Color(0xFF1A1A1A), labelColor = Color.LightGray
                                 )
                             )
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Lineup Cards List
-                if (filteredSets.isEmpty()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("No sets match your filters.", color = Color.DarkGray, fontSize = 16.sp)
+                    if (stages.size > 2) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(stages) { stage ->
+                                FilterChip(
+                                    selected = selectedStage == stage, onClick = { selectedStage = stage },
+                                    label = { Text(stage, fontSize = 12.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = stageKeeperBlue, selectedLabelColor = Color.Black,
+                                        containerColor = Color(0xFF1A1A1A), labelColor = Color.LightGray
+                                    )
+                                )
+                            }
+                        }
                     }
-                } else {
-                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(filteredSets) { set ->
-                            val isBookmarked = bookmarkedSets.contains(set.artistName)
-                            SetCard(set, isBookmarked, stageKeeperPurple, stageKeeperBlue) {
-                                val updatedBookmarks = if (isBookmarked) bookmarkedSets - set.artistName else bookmarkedSets + set.artistName
-                                onBookmarkChange(updatedBookmarks)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (filteredSets.isEmpty()) {
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text("No sets match your filters.", color = Color.DarkGray, fontSize = 16.sp)
+                        }
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(filteredSets) { set ->
+                                val isBookmarked = bookmarkedSets.contains(set.artistName)
+                                SetCard(set, isBookmarked, stageKeeperPurple, stageKeeperBlue) {
+                                    onBookmarkChange(if (isBookmarked) bookmarkedSets - set.artistName else bookmarkedSets + set.artistName)
+                                }
                             }
                         }
                     }
                 }
-            } else {
-                // MY SCHEDULE TAB LOGIC
-                val mySchedule = sets.filter { bookmarkedSets.contains(it.artistName) }
-                    .sortedBy { parseTimeToMinutes(it.startTime) }
-                    .groupBy { it.day }
+                "My Schedule" -> {
+                    val mySchedule = sets.filter { bookmarkedSets.contains(it.artistName) }
+                        .sortedBy { parseTimeToMinutes(it.startTime) }
+                        .groupBy { it.day }
 
-                if (mySchedule.isEmpty()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("No sets bookmarked yet.", color = Color.DarkGray, fontSize = 16.sp)
-                    }
-                } else {
-                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Iterate through the grouped days in the schedule
-                        mySchedule.forEach { (day, dailySets) ->
-                            item {
-                                Text(
-                                    text = day,
-                                    color = stageKeeperBlue,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
-                                )
-                            }
-                            items(dailySets) { set ->
-                                SetCard(set, true, stageKeeperPurple, stageKeeperBlue) {
-                                    onBookmarkChange(bookmarkedSets - set.artistName)
+                    if (mySchedule.isEmpty()) {
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text("No sets bookmarked yet.", color = Color.DarkGray, fontSize = 16.sp)
+                        }
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            mySchedule.forEach { (day, dailySets) ->
+                                item {
+                                    Text(
+                                        text = day, color = stageKeeperBlue, fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                                    )
                                 }
+                                items(dailySets) { set ->
+                                    SetCard(set, true, stageKeeperPurple, stageKeeperBlue) {
+                                        onBookmarkChange(bookmarkedSets - set.artistName)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "Discover" -> {
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Festival Roulette", color = stageKeeperBlue, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("Find a random set you haven't saved yet.", color = Color.LightGray, fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = {
+                                            val unbookmarked = sets.filter { !bookmarkedSets.contains(it.artistName) }
+                                            if (unbookmarked.isNotEmpty()) {
+                                                rouletteSet = unbookmarked.random()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = stageKeeperPurple),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Spin the Wheel", color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    if (rouletteSet != null) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        SetCard(rouletteSet!!, false, stageKeeperPurple, stageKeeperBlue) {
+                                            onBookmarkChange(bookmarkedSets + rouletteSet!!.artistName)
+                                            rouletteSet = null
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            val bookmarkedGenres = sets.filter { bookmarkedSets.contains(it.artistName) }
+                                .map { it.genre }
+                                .filter { it.isNotBlank() }
+
+                            val topGenre = bookmarkedGenres.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+
+                            if (topGenre != null) {
+                                val recommendations = sets.filter {
+                                    it.genre == topGenre && !bookmarkedSets.contains(it.artistName)
+                                }.shuffled().take(3)
+
+                                if (recommendations.isNotEmpty()) {
+                                    Text("Because You Like $topGenre", color = stageKeeperPurple, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    recommendations.forEach { rec ->
+                                        SetCard(rec, false, stageKeeperPurple, stageKeeperBlue) {
+                                            onBookmarkChange(bookmarkedSets + rec.artistName)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text("Vibe Check", color = stageKeeperPurple, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(vibes) { vibe ->
+                                    FilterChip(
+                                        selected = selectedVibe == vibe, onClick = { selectedVibe = vibe },
+                                        label = { Text(vibe, fontWeight = FontWeight.Bold) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = stageKeeperBlue, selectedLabelColor = Color.Black,
+                                            containerColor = Color(0xFF1A1A1A), labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            val vibeFilteredSets = if (selectedVibe == "All") {
+                                emptyList()
+                            } else {
+                                sets.filter { it.genre == selectedVibe && !bookmarkedSets.contains(it.artistName) }
+                            }
+
+                            if (selectedVibe != "All") {
+                                if (vibeFilteredSets.isEmpty()) {
+                                    Text("No unbookmarked sets found for this vibe.", color = Color.DarkGray)
+                                } else {
+                                    vibeFilteredSets.forEach { vSet ->
+                                        SetCard(vSet, false, stageKeeperPurple, stageKeeperBlue) {
+                                            onBookmarkChange(bookmarkedSets + vSet.artistName)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                    }
+                                }
+                            } else {
+                                Text("Select a vibe above to filter.", color = Color.DarkGray, fontSize = 14.sp)
                             }
                         }
                     }
@@ -2792,7 +3141,6 @@ fun LineupScreen(
     }
 }
 
-// Reusable Composable for the Artist Card
 @Composable
 fun SetCard(
     set: FestivalSet,
@@ -3045,6 +3393,7 @@ fun ProfileScreen(
     val user by viewModel.currentUser.collectAsState()
 
     var isEditing by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     var displayName by remember(user) { mutableStateOf(user?.displayName ?: "") }
     var phone by remember(user) { mutableStateOf(user?.phoneNumber ?: "") }
@@ -3067,6 +3416,34 @@ fun ProfileScreen(
             val permanentUri = context.copyUriToPermanentFile(tempCameraUri!!)
             photoUri = permanentUri.toString()
         }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Account?", color = Color.Red, fontWeight = FontWeight.Bold) },
+            text = { Text("This action cannot be undone. All your data, friends, and settings will be permanently destroyed.", color = Color.White) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        viewModel.deleteAccount { success ->
+                            if (success) {
+                                Toast.makeText(context, "Account Deleted.", Toast.LENGTH_SHORT).show()
+                                onLogout()
+                            } else {
+                                Toast.makeText(context, "Error deleting account. Try logging in again.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) { Text("Delete Permanently", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = Color.LightGray) }
+            },
+            containerColor = Color(0xFF1A1A1A)
+        )
     }
 
     if (showPhotoOptionsDialog) {
@@ -3252,6 +3629,16 @@ fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
             ) { Text("Edit Profile", color = Color.White, fontWeight = FontWeight.Bold) }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            TextButton(
+                onClick = { showDeleteConfirm = true },
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text("Delete Account", color = Color.Red, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

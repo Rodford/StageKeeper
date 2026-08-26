@@ -10,6 +10,7 @@ import com.example.stagekeeper.data.PartyGroup
 import com.example.stagekeeper.data.PartyInvite
 import com.example.stagekeeper.data.User
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
@@ -202,13 +203,21 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     fun sendFriendRequest(searchQuery: String, onResult: (Boolean, String) -> Unit) {
         val currentUid = auth.currentUser?.uid ?: return
         val currentUserDoc = _currentUser.value ?: return
-        val cleanQuery = searchQuery.trim()
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val usernameClean = cleanQuery.removePrefix("@").lowercase()
-                var snapshot = firestore.collection("users").whereEqualTo("username", usernameClean).get().await()
+                // Strip the @ and whitespace instantly, force to lowercase
+                val cleanQuery = searchQuery.trim().removePrefix("@")
 
+                // 1. Try lowercase username search (This will hit all new accounts)
+                var snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery.lowercase()).get().await()
+
+                // 2. Fallback: Try exact casing (to catch any old test accounts you made before today)
+                if (snapshot.isEmpty) {
+                    snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
+                }
+
+                // 3. Fallback: Assume it's a phone number
                 if (snapshot.isEmpty) {
                     snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
                 }
@@ -311,7 +320,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // CHANGED: Now also computes mutual friends for suggestions!
+    // Now also computes mutual friends for suggestions!
     fun loadFriendsList() {
         val currentUid = auth.currentUser?.uid ?: return
         viewModelScope.launch(Dispatchers.IO) {
@@ -642,28 +651,185 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- USER PROFILE & AUTH LOGIC ---
-    fun isUserLoggedIn(): Boolean {
-        val firebaseUser = auth.currentUser
-        return if (firebaseUser != null) {
-            initMeshEngine()
-            loadUserParties()
-            loadFriendsList()
-            startListeningForInvites()
+    // --- ACCOUNT RECOVERY & DELETION ---
+    fun resetPassword(email: String, onResult: (Boolean, String) -> Unit) {
+        auth.sendPasswordResetEmail(email.trim())
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    onResult(true, "Password reset email sent!")
+                } else {
+                    onResult(false, task.exception?.message ?: "Error sending reset email.")
+                }
+            }
+    }
 
+    fun recoverEmail(usernameOrPhone: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Strip the @ and whitespace instantly
+                val cleanQuery = usernameOrPhone.trim().removePrefix("@")
+
+                // 1. Try lowercase username search
+                var snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery.lowercase()).get().await()
+
+                // 2. Fallback: Try exact casing (for old accounts)
+                if (snapshot.isEmpty) {
+                    snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
+                }
+
+                // 3. Fallback: Assume it's a phone number
+                if (snapshot.isEmpty) {
+                    snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
+                }
+
+                if (!snapshot.isEmpty) {
+                    val user = snapshot.documents.first().toObject(User::class.java)
+                    if (user != null) {
+                        // Mask the email for security (e.g., r***@gmail.com)
+                        val emailParts = user.email.split("@")
+                        val maskedEmail = if (emailParts.size == 2) {
+                            "${emailParts[0].first()}***@${emailParts[1]}"
+                        } else user.email
+
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            onResult(true, "Account found! Email: $maskedEmail")
+                        }
+                        return@launch
+                    }
+                }
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "No account found matching that info.") }
+            } catch (e: Exception) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
+            }
+        }
+    }
+
+    fun deleteAccount(onComplete: (Boolean) -> Unit) {
+        val user = auth.currentUser
+        val uid = user?.uid ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Delete user data from Firestore
+                firestore.collection("users").document(uid).delete().await()
+                // Delete auth profile from Firebase
+                user.delete().await()
+
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    logoutUser()
+                    onComplete(true)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(false) }
+            }
+        }
+    }
+
+    // --- GOOGLE SIGN IN & AUTH LOGIC ---
+    fun checkAuthStatus(onResult: (isLoggedIn: Boolean, missingProfile: Boolean) -> Unit) {
+        val firebaseUser = auth.currentUser
+        if (firebaseUser != null) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     val docSnapshot = firestore.collection("users").document(firebaseUser.uid).get().await()
-                    val fetchedUser = docSnapshot.toObject(User::class.java)
-                    if (fetchedUser != null) {
-                        _currentUser.value = fetchedUser
-                        cacheEmergencyInfo(fetchedUser)
+                    if (docSnapshot.exists()) {
+                        val fetchedUser = docSnapshot.toObject(User::class.java)
+                        if (fetchedUser != null) {
+                            _currentUser.value = fetchedUser
+                            cacheEmergencyInfo(fetchedUser)
+                        }
+                        initMeshEngine()
+                        loadUserParties()
+                        loadFriendsList()
+                        startListeningForInvites()
+
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false) }
+                    } else {
+                        // Limbo State: Authenticated in Firebase, but aborted the setup screen!
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true) }
                     }
-                } catch (e: Exception) { e.printStackTrace() }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false) }
+                }
             }
-            true
         } else {
-            false
+            onResult(false, false)
+        }
+    }
+
+    fun authenticateWithGoogle(idToken: String, onResult: (Boolean, Boolean, String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val credential = GoogleAuthProvider.getCredential(idToken, null)
+                val authResult = auth.signInWithCredential(credential).await()
+                val firebaseUser = authResult.user
+
+                if (firebaseUser != null) {
+                    val uid = firebaseUser.uid
+                    val userDocRef = firestore.collection("users").document(uid)
+                    val snapshot = userDocRef.get().await()
+
+                    if (snapshot.exists()) {
+                        // Existing user - log them right in!
+                        val existingUser = snapshot.toObject(User::class.java)
+                        _currentUser.value = existingUser
+                        if (existingUser != null) cacheEmergencyInfo(existingUser)
+
+                        initMeshEngine()
+                        loadUserParties()
+                        loadFriendsList()
+                        startListeningForInvites()
+
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false, "Welcome back!") }
+                    } else {
+                        // Brand new Google user - Send them to the setup screen!
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true, "Please complete your profile.") }
+                    }
+                } else {
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false, "Google Sign-In failed.") }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false, e.message ?: "Network Error") }
+            }
+        }
+    }
+
+    fun completeGoogleProfile(username: String, displayName: String, phone: String, emergencyContact: String, medicalInfo: String, onResult: (Boolean, String) -> Unit) {
+        val firebaseUser = auth.currentUser
+        if (firebaseUser == null) {
+            onResult(false, "Authentication lost. Please log in again.")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val newUser = User(
+                    userId = firebaseUser.uid,
+                    email = firebaseUser.email ?: "",
+                    password = "", // No password needed for Google accounts
+                    username = username.trim().lowercase().removePrefix("@"),
+                    displayName = displayName.trim(),
+                    phoneNumber = phone.ifBlank { null },
+                    emergencyContact = emergencyContact.ifBlank { null },
+                    medicalInfo = medicalInfo.ifBlank { null },
+                    partyCode = ""
+                )
+
+                firestore.collection("users").document(firebaseUser.uid).set(newUser).await()
+                _currentUser.value = newUser
+                cacheEmergencyInfo(newUser)
+
+                initMeshEngine()
+                loadUserParties()
+                loadFriendsList()
+                startListeningForInvites()
+
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, "Profile completed!") }
+            } catch (e: Exception) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, e.message ?: "Error saving profile.") }
+            }
         }
     }
 

@@ -53,6 +53,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.credentials:credentials:1.3.0-alpha01")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0-alpha01")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     // Room Database
     implementation(libs.room.runtime)
