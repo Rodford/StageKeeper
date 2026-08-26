@@ -1,8 +1,7 @@
 package com.example.stagekeeper.data
 
-// Blueprint for user profiles, now configured for Firebase Firestore
 data class User(
-    val userId: String = "",       // Changed to String to hold the Firebase UID
+    val userId: String = "",
     val email: String = "",
     val password: String = "",
     val username: String = "",
