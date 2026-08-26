@@ -1,9 +1,10 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
-    // Removed kotlin.android here because AGP 9 applies it automatically!
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
-    // ADDED: Google Services plugin required for Firebase
     id("com.google.gms.google-services")
 }
 
@@ -11,14 +12,31 @@ android {
     namespace = "com.example.stagekeeper"
     compileSdk = 36
 
+    // Securely read the local.properties file
+    val localProperties = Properties()
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localProperties.load(FileInputStream(localPropertiesFile))
+    }
+
     defaultConfig {
         applicationId = "com.example.stagekeeper"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField(
+            "String",
+            "MAPBOX_TOKEN",
+            localProperties.getProperty("MAPBOX_ACCESS_TOKEN") ?: "\"\""
+        )
+        buildConfigField(
+            "String",
+            "GOOGLE_CLIENT_ID",
+            localProperties.getProperty("GOOGLE_CLIENT_ID") ?: "\"\""
+        )
     }
 
     buildTypes {
@@ -36,6 +54,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -48,37 +67,29 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("com.google.android.gms:play-services-nearby:19.0.0")
-    implementation("io.coil-kt:coil-compose:2.6.0")
+
+    implementation("com.google.android.gms:play-services-nearby:19.5.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("androidx.credentials:credentials:1.3.0-alpha01")
-    implementation("androidx.credentials:credentials-play-services-auth:1.3.0-alpha01")
-    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    implementation("androidx.security:security-crypto:1.1.0")
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")
 
-    // Room Database
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
-    // Mapbox
     implementation(libs.mapbox.maps)
 
-    // GPS Hardware Location
-    implementation("com.google.android.gms:play-services-location:21.1.0")
+    implementation("com.google.android.gms:play-services-location:21.4.0")
 
-    // --- Added: FIREBASE LIBRARIES ---
-    // Import the Firebase BoM (Bill of Materials) so you don't have to specify versions for every Firebase tool
-    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
-
-    // Add the dependencies for Firebase Authentication and Firestore
+    implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
-    // ---------------------------------
 
-    // Google Gson for JSON parsing (used in MeshManager to serialize map pins for offline transfer)
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.code.gson:gson:2.14.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -87,5 +98,5 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
 }

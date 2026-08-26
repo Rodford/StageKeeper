@@ -2,6 +2,7 @@ package com.example.stagekeeper
 
 import android.app.Application
 import android.content.Context
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.stagekeeper.data.ChatMessage
@@ -11,8 +12,8 @@ import com.example.stagekeeper.data.PartyInvite
 import com.example.stagekeeper.data.User
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
@@ -35,24 +36,60 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private val firestore = FirebaseFirestore.getInstance()
     private var meshManager: MeshManager? = null
 
+    // --- STATE FLOWS ---
     private val _availableParties = MutableStateFlow<List<PartyGroup>>(emptyList())
     val availableParties: StateFlow<List<PartyGroup>> = _availableParties
 
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser
 
-    // --- INACTIVITY TIMER STATE ---
-    private var inactivityJob: Job? = null
+    private val _isLowPowerMode = MutableStateFlow(false)
+    val isLowPowerMode: StateFlow<Boolean> = _isLowPowerMode.asStateFlow()
+
     private val _sessionExpired = MutableStateFlow(false)
     val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
 
+    private val _partyMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val partyMessages: StateFlow<List<ChatMessage>> = _partyMessages.asStateFlow()
+
+    private val _dmMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val dmMessages: StateFlow<List<ChatMessage>> = _dmMessages.asStateFlow()
+
+    private val _friendsList = MutableStateFlow<List<User>>(emptyList())
+    val friendsList: StateFlow<List<User>> = _friendsList
+
+    private val _suggestedFriends = MutableStateFlow<List<User>>(emptyList())
+    val suggestedFriends: StateFlow<List<User>> = _suggestedFriends
+
+    private val _incomingInvites = MutableStateFlow<List<PartyInvite>>(emptyList())
+    val incomingInvites: StateFlow<List<PartyInvite>> = _incomingInvites
+
+    private val _incomingFriendRequests = MutableStateFlow<List<FriendRequest>>(emptyList())
+    val incomingFriendRequests: StateFlow<List<FriendRequest>> = _incomingFriendRequests
+
+    val allLocations: StateFlow<List<MeetupLocation>> = locationDao.getAllLocations()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // --- LISTENERS & JOBS ---
+    private var inactivityJob: Job? = null
+    private var partyChatListener: ListenerRegistration? = null
+    private var dmChatListener: ListenerRegistration? = null
+    private var inviteListener: ListenerRegistration? = null
+    private var friendRequestListener: ListenerRegistration? = null
+    private var pinListener: ListenerRegistration? = null
+
+    // ==========================================
+    // SYSTEM & POWER CONTROLS
+    // ==========================================
+    fun togglePowerMode(enabled: Boolean) {
+        _isLowPowerMode.value = enabled
+    }
+
     fun resetInactivityTimer() {
         inactivityJob?.cancel()
-
-        // Only run the timer if the user is actually logged in
         if (auth.currentUser != null) {
             inactivityJob = viewModelScope.launch {
-                delay(5 * 60 * 1000L) // 5 minutes in milliseconds
+                delay(5 * 60 * 1000L)
                 _sessionExpired.value = true
             }
         }
@@ -62,22 +99,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         _sessionExpired.value = false
     }
 
-    // --- CHAT STATES ---
-    private val _partyMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val partyMessages: StateFlow<List<ChatMessage>> = _partyMessages.asStateFlow()
-
-    private val _dmMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val dmMessages: StateFlow<List<ChatMessage>> = _dmMessages.asStateFlow()
-
-    private var partyChatListener: ListenerRegistration? = null
-    private var dmChatListener: ListenerRegistration? = null
-
+    // ==========================================
+    // USER PROFILE
+    // ==========================================
     private fun cacheEmergencyInfo(user: User) {
         val prefs = getApplication<Application>().getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString("em_contact", user.emergencyContact ?: "No contact provided.")
-            .putString("em_medical", user.medicalInfo ?: "No medical information provided.")
-            .apply()
+        prefs.edit {
+            putString("em_contact", user.emergencyContact ?: "No contact provided.")
+            putString("em_medical", user.medicalInfo ?: "No medical information provided.")
+        }
     }
 
     fun updateUserProfile(displayName: String, phone: String, emergency: String, medical: String, photoUri: String, onComplete: (Boolean) -> Unit) {
@@ -104,24 +134,24 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ==========================================
-    // CHAT SYSTEM LOGIC
+    // CHAT SYSTEM
     // ==========================================
-
     fun sendPartyMessage(partyName: String, text: String) {
         val user = currentUser.value ?: return
         val party = _availableParties.value.find { it.partyName == partyName } ?: return
+        val msgId = UUID.randomUUID().toString()
+        val timestamp = System.currentTimeMillis()
 
-        val message = ChatMessage(
-            messageId = UUID.randomUUID().toString(),
-            senderId = user.userId,
-            senderName = user.displayName,
-            text = text,
-            timestamp = System.currentTimeMillis()
-        )
+        val message = ChatMessage(messageId = msgId, senderId = user.userId, senderName = user.displayName, text = text, timestamp = timestamp)
+        val payload = "P_CHAT|${msgId}|${user.userId}|${user.displayName}|${party.partyId}|$text|$timestamp"
 
-        firestore.collection("parties").document(party.partyId)
-            .collection("messages").document(message.messageId)
-            .set(message)
+        meshManager?.broadcastData(payload)
+
+        val currentList = _partyMessages.value.toMutableList()
+        currentList.add(message)
+        _partyMessages.value = currentList.sortedBy { it.timestamp }
+
+        firestore.collection("parties").document(party.partyId).collection("messages").document(message.messageId).set(message)
     }
 
     fun startListeningToPartyChat(partyName: String) {
@@ -133,9 +163,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-
                 val messages = snapshot.documents.mapNotNull { it.toObject(ChatMessage::class.java) }
-                _partyMessages.value = messages
+
+                val currentIds = _partyMessages.value.map { it.messageId }.toSet()
+                val newMessages = messages.filter { !currentIds.contains(it.messageId) }
+
+                if (newMessages.isNotEmpty()) {
+                    val combined = (_partyMessages.value + newMessages).sortedBy { it.timestamp }.distinctBy { it.messageId }
+                    _partyMessages.value = combined
+                }
             }
     }
 
@@ -146,18 +182,19 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     fun sendDirectMessage(friendId: String, text: String) {
         val user = currentUser.value ?: return
         val threadId = getDMThreadId(user.userId, friendId)
+        val msgId = UUID.randomUUID().toString()
+        val timestamp = System.currentTimeMillis()
 
-        val message = ChatMessage(
-            messageId = UUID.randomUUID().toString(),
-            senderId = user.userId,
-            senderName = user.displayName,
-            text = text,
-            timestamp = System.currentTimeMillis()
-        )
+        val message = ChatMessage(messageId = msgId, senderId = user.userId, senderName = user.displayName, text = text, timestamp = timestamp)
+        val payload = "D_CHAT|${msgId}|${user.userId}|${user.displayName}|$threadId|$text|$timestamp"
 
-        firestore.collection("direct_messages").document(threadId)
-            .collection("messages").document(message.messageId)
-            .set(message)
+        meshManager?.broadcastData(payload)
+
+        val currentList = _dmMessages.value.toMutableList()
+        currentList.add(message)
+        _dmMessages.value = currentList.sortedBy { it.timestamp }
+
+        firestore.collection("direct_messages").document(threadId).collection("messages").document(message.messageId).set(message)
     }
 
     fun startListeningToDMs(friendId: String) {
@@ -170,9 +207,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-
                 val messages = snapshot.documents.mapNotNull { it.toObject(ChatMessage::class.java) }
-                _dmMessages.value = messages
+
+                val currentIds = _dmMessages.value.map { it.messageId }.toSet()
+                val newMessages = messages.filter { !currentIds.contains(it.messageId) }
+
+                if (newMessages.isNotEmpty()) {
+                    val combined = (_dmMessages.value + newMessages).sortedBy { it.timestamp }.distinctBy { it.messageId }
+                    _dmMessages.value = combined
+                }
             }
     }
 
@@ -182,45 +225,20 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         _dmMessages.value = emptyList()
     }
 
-
-    // --- FRIENDS & INVITES STATE ---
-    private val _friendsList = MutableStateFlow<List<User>>(emptyList())
-    val friendsList: StateFlow<List<User>> = _friendsList
-
-    // NEW: StateFlow for Friends of Friends
-    private val _suggestedFriends = MutableStateFlow<List<User>>(emptyList())
-    val suggestedFriends: StateFlow<List<User>> = _suggestedFriends
-
-    private val _incomingInvites = MutableStateFlow<List<PartyInvite>>(emptyList())
-    val incomingInvites: StateFlow<List<PartyInvite>> = _incomingInvites
-
-    private val _incomingFriendRequests = MutableStateFlow<List<FriendRequest>>(emptyList())
-    val incomingFriendRequests: StateFlow<List<FriendRequest>> = _incomingFriendRequests
-
-    private var inviteListener: ListenerRegistration? = null
-    private var friendRequestListener: ListenerRegistration? = null
-
+    // ==========================================
+    // FRIENDS & INVITES
+    // ==========================================
     fun sendFriendRequest(searchQuery: String, onResult: (Boolean, String) -> Unit) {
         val currentUid = auth.currentUser?.uid ?: return
         val currentUserDoc = _currentUser.value ?: return
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Strip the @ and whitespace instantly, force to lowercase
                 val cleanQuery = searchQuery.trim().removePrefix("@")
-
-                // 1. Try lowercase username search (This will hit all new accounts)
                 var snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery.lowercase()).get().await()
 
-                // 2. Fallback: Try exact casing (to catch any old test accounts you made before today)
-                if (snapshot.isEmpty) {
-                    snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
-                }
-
-                // 3. Fallback: Assume it's a phone number
-                if (snapshot.isEmpty) {
-                    snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
-                }
+                if (snapshot.isEmpty) snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
+                if (snapshot.isEmpty) snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
 
                 if (snapshot.isEmpty) {
                     kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "User not found.") }
@@ -320,7 +338,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Now also computes mutual friends for suggestions!
     fun loadFriendsList() {
         val currentUid = auth.currentUser?.uid ?: return
         viewModelScope.launch(Dispatchers.IO) {
@@ -335,42 +352,24 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val snapshot = firestore.collection("users")
-                    .whereIn("userId", friendIds.take(10))
-                    .get()
-                    .await()
-
+                val snapshot = firestore.collection("users").whereIn("userId", friendIds.take(10)).get().await()
                 val fetchedFriends = snapshot.toObjects(User::class.java)
                 _friendsList.value = fetchedFriends
 
-                // --- GENERATE MUTUAL FRIEND SUGGESTIONS ---
                 val mutualCandidates = mutableSetOf<String>()
-                fetchedFriends.forEach { friend ->
-                    mutualCandidates.addAll(friend.friends)
-                }
+                fetchedFriends.forEach { friend -> mutualCandidates.addAll(friend.friends) }
 
-                // Filter out self, existing friends, and blocked users
                 val filteredCandidates = mutualCandidates.filter { id ->
-                    id != currentUid &&
-                            !currentUserObj.friends.contains(id) &&
-                            !currentUserObj.blockedUsers.contains(id)
-                }.take(10) // Limit suggestions
+                    id != currentUid && !currentUserObj.friends.contains(id) && !currentUserObj.blockedUsers.contains(id)
+                }.take(10)
 
                 if (filteredCandidates.isNotEmpty()) {
-                    val suggestionsSnapshot = firestore.collection("users")
-                        .whereIn("userId", filteredCandidates)
-                        .get()
-                        .await()
-
-                    // Filter out people who have blocked US
-                    val validSuggestions = suggestionsSnapshot.toObjects(User::class.java).filter {
-                        !it.blockedUsers.contains(currentUid)
-                    }
+                    val suggestionsSnapshot = firestore.collection("users").whereIn("userId", filteredCandidates).get().await()
+                    val validSuggestions = suggestionsSnapshot.toObjects(User::class.java).filter { !it.blockedUsers.contains(currentUid) }
                     _suggestedFriends.value = validSuggestions
                 } else {
                     _suggestedFriends.value = emptyList()
                 }
-
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -409,15 +408,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         inviteListener?.remove()
         friendRequestListener?.remove()
 
-        inviteListener = firestore.collection("invites")
-            .whereEqualTo("toUserId", currentUid)
+        inviteListener = firestore.collection("invites").whereEqualTo("toUserId", currentUid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
                 _incomingInvites.value = snapshot.toObjects(PartyInvite::class.java)
             }
 
-        friendRequestListener = firestore.collection("friend_requests")
-            .whereEqualTo("toUserId", currentUid)
+        friendRequestListener = firestore.collection("friend_requests").whereEqualTo("toUserId", currentUid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
                 _incomingFriendRequests.value = snapshot.toObjects(FriendRequest::class.java)
@@ -428,11 +425,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 firestore.collection("invites").document(invite.inviteId).delete().await()
-
                 if (accept) {
-                    joinParty(invite.inviteCode) { success, _ ->
-                        onComplete(success)
-                    }
+                    joinParty(invite.inviteCode) { success, _ -> onComplete(success) }
                 } else {
                     kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(true) }
                 }
@@ -443,7 +437,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- HIDDEN PINS BURN BOOK LOGIC ---
+    // ==========================================
+    // MESH NETWORK & PINS
+    // ==========================================
     private fun getHiddenPins(): Set<String> {
         val prefs = getApplication<Application>().getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
         return prefs.getStringSet("hidden_pins", emptySet()) ?: emptySet()
@@ -453,25 +449,53 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val prefs = getApplication<Application>().getSharedPreferences("StageKeeperPrefs", Context.MODE_PRIVATE)
         val current = prefs.getStringSet("hidden_pins", emptySet())?.toMutableSet() ?: mutableSetOf()
         current.addAll(pinIds)
-        prefs.edit().putStringSet("hidden_pins", current).apply()
+        prefs.edit { putStringSet("hidden_pins", current) }
     }
 
-    // --- MESH NETWORK CONTROLS ---
     private fun initMeshEngine() {
         val uid = auth.currentUser?.uid ?: return
-        meshManager = MeshManager(getApplication(), uid) { receivedPin ->
+        meshManager = MeshManager(getApplication(), uid) { rawPayload ->
             viewModelScope.launch(Dispatchers.IO) {
-                if (receivedPin.pinId == "COMMAND_CLEAR_ALL") {
-                    // Admin commanded a network wipe. Hide current pins so they never return from local cache
-                    val currentPins = allLocations.value.map { it.pinId }
-                    addHiddenPins(currentPins)
-                    locationDao.deleteAll()
-                } else {
-                    // Only save to Room if this user hasn't explicitly hidden this pin
-                    if (!getHiddenPins().contains(receivedPin.pinId)) {
-                        locationDao.insertLocation(receivedPin)
+                try {
+                    val parts = rawPayload.split("|")
+                    when (parts[0]) {
+                        "PIN" -> {
+                            val pin = MeetupLocation(
+                                pinId = parts[1], partyId = parts[2],
+                                latitude = parts[3].toDouble(), longitude = parts[4].toDouble(), note = parts[5]
+                            )
+                            if (pin.pinId == "COMMAND_CLEAR_ALL") {
+                                val currentPins = allLocations.value.map { it.pinId }
+                                addHiddenPins(currentPins)
+                                locationDao.deleteAll()
+                            } else if (!getHiddenPins().contains(pin.pinId)) {
+                                locationDao.insertLocation(pin)
+                            }
+                        }
+                        "P_CHAT" -> {
+                            val msg = ChatMessage(
+                                messageId = parts[1], senderId = parts[2], senderName = parts[3],
+                                text = parts[5], timestamp = parts[6].toLong()
+                            )
+                            val currentList = _partyMessages.value.toMutableList()
+                            if (currentList.none { it.messageId == msg.messageId }) {
+                                currentList.add(msg)
+                                _partyMessages.value = currentList.sortedBy { it.timestamp }
+                            }
+                        }
+                        "D_CHAT" -> {
+                            val msg = ChatMessage(
+                                messageId = parts[1], senderId = parts[2], senderName = parts[3],
+                                text = parts[5], timestamp = parts[6].toLong()
+                            )
+                            val currentList = _dmMessages.value.toMutableList()
+                            if (currentList.none { it.messageId == msg.messageId }) {
+                                currentList.add(msg)
+                                _dmMessages.value = currentList.sortedBy { it.timestamp }
+                            }
+                        }
                     }
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
@@ -485,7 +509,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         meshManager?.stopMesh()
     }
 
-    // --- DYNAMIC PARTY LOGIC ---
     fun createNewParty(partyName: String, onResult: (String) -> Unit) {
         val uid = auth.currentUser?.uid ?: return
         val inviteCode = UUID.randomUUID().toString().take(6).uppercase()
@@ -516,7 +539,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 firestore.collection("parties").document(partyDoc.id).update("memberIds", FieldValue.arrayUnion(uid)).await()
                 loadUserParties()
                 kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, partyDoc.getString("partyName") ?: "") }
-            } catch (e: Exception) { e.printStackTrace(); kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") } }
+            } catch (_: Exception) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
+            }
         }
     }
 
@@ -548,47 +573,30 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- MAP PIN SYNC LOGIC ---
-    val allLocations: StateFlow<List<MeetupLocation>> = locationDao.getAllLocations()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    private var pinListener: ListenerRegistration? = null
-
     fun startListeningToPartyPins(partyName: String) {
         pinListener?.remove()
         val party = _availableParties.value.find { it.partyName == partyName } ?: return
-
         val pinsRef = firestore.collection("parties").document(party.partyId).collection("pins")
 
-        // 1. Bypass the lazy local cache and demand the real history from Google's servers
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Source.SERVER forces a network call. It will fail silently if totally offline.
                 val serverSnapshot = pinsRef.get(com.google.firebase.firestore.Source.SERVER).await()
                 val hidden = getHiddenPins()
-
                 serverSnapshot.toObjects(MeetupLocation::class.java).forEach { pin ->
-                    if (!hidden.contains(pin.pinId)) {
-                        locationDao.insertLocation(pin)
-                    }
+                    if (!hidden.contains(pin.pinId)) locationDao.insertLocation(pin)
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 android.util.Log.d("CloudSync", "Offline. Relying on local cache and Mesh Network.")
             }
         }
 
-        // 2. Keep the real-time listener active for live updates while online
         pinListener = pinsRef.addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null) return@addSnapshotListener
-
             viewModelScope.launch(Dispatchers.IO) {
                 val hidden = getHiddenPins()
                 val cloudPins = snapshot.toObjects(MeetupLocation::class.java)
                 cloudPins.forEach { pin ->
-                    // Only sync pins from cloud if the user hasn't explicitly hidden them
-                    if (!hidden.contains(pin.pinId)) {
-                        locationDao.insertLocation(pin)
-                    }
+                    if (!hidden.contains(pin.pinId)) locationDao.insertLocation(pin)
                 }
             }
         }
@@ -598,15 +606,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val party = _availableParties.value.find { it.partyName == activePartyName }
         val partyId = party?.partyId ?: ""
         val pinId = UUID.randomUUID().toString()
-
         val loc = MeetupLocation(pinId = pinId, partyId = partyId, latitude = lat, longitude = lng, note = note)
 
         viewModelScope.launch(Dispatchers.IO) {
             locationDao.insertLocation(loc)
-            meshManager?.broadcastPin(loc)
+            val payload = "PIN|$pinId|$partyId|$lat|$lng|$note"
+            meshManager?.broadcastData(payload)
 
             if (partyId.isNotBlank()) {
-                // Firebase automatically queues this if offline, and sends it when online
                 firestore.collection("parties").document(partyId).collection("pins").document(pinId).set(loc)
             }
         }
@@ -617,88 +624,55 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val party = _availableParties.value.find { it.partyName == activePartyName } ?: return
 
         viewModelScope.launch(Dispatchers.IO) {
-            // 1. Hide all current pins locally so they never come back from offline cache
             val currentPins = allLocations.value.map { it.pinId }
             addHiddenPins(currentPins)
             locationDao.deleteAll()
 
-            // 2. Only broadcast the Kill Switch and wipe the Cloud if this user is the Admin!
             if (party.adminUserId == uid) {
-
-                // Broadcast kill switch to offline devices
-                val clearCommand = MeetupLocation(
-                    pinId = "COMMAND_CLEAR_ALL",
-                    partyId = party.partyId,
-                    latitude = 0.0,
-                    longitude = 0.0,
-                    note = "COMMAND_CLEAR_ALL"
-                )
-                meshManager?.broadcastPin(clearCommand)
-
-                // Admin wipes cloud database cleanly for everyone else
+                val clearCommand = "PIN|COMMAND_CLEAR_ALL|${party.partyId}|0.0|0.0|COMMAND_CLEAR_ALL"
+                meshManager?.broadcastData(clearCommand)
                 try {
                     val pinsRef = firestore.collection("parties").document(party.partyId).collection("pins")
                     val snapshot = pinsRef.get().await()
                     val batch = firestore.batch()
-                    for (doc in snapshot.documents) {
-                        batch.delete(doc.reference)
-                    }
+                    for (doc in snapshot.documents) batch.delete(doc.reference)
                     batch.commit().await()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
 
-    // --- ACCOUNT RECOVERY & DELETION ---
+    // ==========================================
+    // AUTHENTICATION & RECOVERY
+    // ==========================================
     fun resetPassword(email: String, onResult: (Boolean, String) -> Unit) {
         auth.sendPasswordResetEmail(email.trim())
             .addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    onResult(true, "Password reset email sent!")
-                } else {
-                    onResult(false, task.exception?.message ?: "Error sending reset email.")
-                }
+                if (task.isSuccessful) onResult(true, "Password reset email sent!")
+                else onResult(false, task.exception?.message ?: "Error sending reset email.")
             }
     }
 
     fun recoverEmail(usernameOrPhone: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Strip the @ and whitespace instantly
                 val cleanQuery = usernameOrPhone.trim().removePrefix("@")
-
-                // 1. Try lowercase username search
                 var snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery.lowercase()).get().await()
 
-                // 2. Fallback: Try exact casing (for old accounts)
-                if (snapshot.isEmpty) {
-                    snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
-                }
-
-                // 3. Fallback: Assume it's a phone number
-                if (snapshot.isEmpty) {
-                    snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
-                }
+                if (snapshot.isEmpty) snapshot = firestore.collection("users").whereEqualTo("username", cleanQuery).get().await()
+                if (snapshot.isEmpty) snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
 
                 if (!snapshot.isEmpty) {
                     val user = snapshot.documents.first().toObject(User::class.java)
                     if (user != null) {
-                        // Mask the email for security (e.g., r***@gmail.com)
                         val emailParts = user.email.split("@")
-                        val maskedEmail = if (emailParts.size == 2) {
-                            "${emailParts[0].first()}***@${emailParts[1]}"
-                        } else user.email
-
-                        kotlinx.coroutines.withContext(Dispatchers.Main) {
-                            onResult(true, "Account found! Email: $maskedEmail")
-                        }
+                        val maskedEmail = if (emailParts.size == 2) "${emailParts[0].first()}***@${emailParts[1]}" else user.email
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, "Account found! Email: $maskedEmail") }
                         return@launch
                     }
                 }
                 kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "No account found matching that info.") }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
             }
         }
@@ -709,11 +683,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val uid = user?.uid ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Delete user data from Firestore
                 firestore.collection("users").document(uid).delete().await()
-                // Delete auth profile from Firebase
                 user.delete().await()
-
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                     logoutUser()
                     onComplete(true)
@@ -725,7 +696,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- GOOGLE SIGN IN & AUTH LOGIC ---
     fun checkAuthStatus(onResult: (isLoggedIn: Boolean, missingProfile: Boolean) -> Unit) {
         val firebaseUser = auth.currentUser
         if (firebaseUser != null) {
@@ -745,7 +715,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
                         kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false) }
                     } else {
-                        // Limbo State: Authenticated in Firebase, but aborted the setup screen!
                         kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true) }
                     }
                 } catch (e: Exception) {
@@ -771,7 +740,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     val snapshot = userDocRef.get().await()
 
                     if (snapshot.exists()) {
-                        // Existing user - log them right in!
                         val existingUser = snapshot.toObject(User::class.java)
                         _currentUser.value = existingUser
                         if (existingUser != null) cacheEmergencyInfo(existingUser)
@@ -783,7 +751,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
                         kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false, "Welcome back!") }
                     } else {
-                        // Brand new Google user - Send them to the setup screen!
                         kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true, "Please complete your profile.") }
                     }
                 } else {
@@ -808,7 +775,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 val newUser = User(
                     userId = firebaseUser.uid,
                     email = firebaseUser.email ?: "",
-                    password = "", // No password needed for Google accounts
+                    password = "",
                     username = username.trim().lowercase().removePrefix("@"),
                     displayName = displayName.trim(),
                     phoneNumber = phone.ifBlank { null },
@@ -879,9 +846,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     val fetchedUser = docSnapshot.toObject(User::class.java)
 
                     _currentUser.value = fetchedUser
-                    if (fetchedUser != null) {
-                        cacheEmergencyInfo(fetchedUser)
-                    }
+                    if (fetchedUser != null) cacheEmergencyInfo(fetchedUser)
 
                     initMeshEngine()
                     loadUserParties()
