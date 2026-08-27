@@ -2,20 +2,25 @@ package com.example.stagekeeper
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+
 import com.example.stagekeeper.data.ChatMessage
 import com.example.stagekeeper.data.FriendRequest
 import com.example.stagekeeper.data.PartyGroup
 import com.example.stagekeeper.data.PartyInvite
 import com.example.stagekeeper.data.User
+
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Source
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -26,6 +31,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+
 import java.util.UUID
 
 class MapViewModel(application: Application) : AndroidViewModel(application) {
@@ -68,7 +75,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     val incomingFriendRequests: StateFlow<List<FriendRequest>> = _incomingFriendRequests
 
     val allLocations: StateFlow<List<MeetupLocation>> = locationDao.getAllLocations()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(viewModelScope, SharingStarted.Companion.Lazily, emptyList())
 
     // --- LISTENERS & JOBS ---
     private var inactivityJob: Job? = null
@@ -125,10 +132,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 firestore.collection("users").document(user.userId).set(updatedUser).await()
                 _currentUser.value = updatedUser
                 cacheEmergencyInfo(updatedUser)
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(true) }
+                withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(false) }
+                withContext(Dispatchers.Main) { onComplete(false) }
             }
         }
     }
@@ -241,7 +248,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 if (snapshot.isEmpty) snapshot = firestore.collection("users").whereEqualTo("phoneNumber", cleanQuery).get().await()
 
                 if (snapshot.isEmpty) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "User not found.") }
+                    withContext(Dispatchers.Main) { onResult(false, "User not found.") }
                     return@launch
                 }
 
@@ -249,17 +256,17 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 val friendUser = friendDoc.toObject(User::class.java)!!
 
                 if (friendUser.userId == currentUid) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "You cannot add yourself.") }
+                    withContext(Dispatchers.Main) { onResult(false, "You cannot add yourself.") }
                     return@launch
                 }
 
                 if (currentUserDoc.friends.contains(friendUser.userId)) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Already friends with this user.") }
+                    withContext(Dispatchers.Main) { onResult(false, "Already friends with this user.") }
                     return@launch
                 }
 
                 if (friendUser.blockedUsers.contains(currentUid)) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Cannot send request to this user.") }
+                    withContext(Dispatchers.Main) { onResult(false, "Cannot send request to this user.") }
                     return@launch
                 }
 
@@ -272,12 +279,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 requestRef.set(request).await()
 
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     onResult(true, "Friend request sent to ${friendUser.displayName}!")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
+                withContext(Dispatchers.Main) { onResult(false, "Network error.") }
             }
         }
     }
@@ -395,10 +402,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 inviteRef.set(invite).await()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true) }
+                withContext(Dispatchers.Main) { onResult(true) }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) }
+                withContext(Dispatchers.Main) { onResult(false) }
             }
         }
     }
@@ -428,11 +435,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 if (accept) {
                     joinParty(invite.inviteCode) { success, _ -> onComplete(success) }
                 } else {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(true) }
+                    withContext(Dispatchers.Main) { onComplete(true) }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(false) }
+                withContext(Dispatchers.Main) { onComplete(false) }
             }
         }
     }
@@ -519,7 +526,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 val newParty = PartyGroup(partyId = newPartyRef.id, partyName = partyName, inviteCode = inviteCode, adminUserId = uid, memberIds = listOf(uid))
                 newPartyRef.set(newParty).await()
                 loadUserParties()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(inviteCode) }
+                withContext(Dispatchers.Main) { onResult(inviteCode) }
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
@@ -532,15 +539,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val snapshot = firestore.collection("parties").whereEqualTo("inviteCode", cleanCode).get().await()
                 if (snapshot.isEmpty) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Invalid Invite Code.") }
+                    withContext(Dispatchers.Main) { onResult(false, "Invalid Invite Code.") }
                     return@launch
                 }
                 val partyDoc = snapshot.documents.first()
                 firestore.collection("parties").document(partyDoc.id).update("memberIds", FieldValue.arrayUnion(uid)).await()
                 loadUserParties()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, partyDoc.getString("partyName") ?: "") }
+                withContext(Dispatchers.Main) { onResult(true, partyDoc.getString("partyName") ?: "") }
             } catch (_: Exception) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
+                withContext(Dispatchers.Main) { onResult(false, "Network error.") }
             }
         }
     }
@@ -554,10 +561,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 firestore.collection("parties").document(party.partyId).update("memberIds", FieldValue.arrayRemove(uid)).await()
                 loadUserParties()
                 turnOffOfflineMesh()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true) }
+                withContext(Dispatchers.Main) { onResult(true) }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) }
+                withContext(Dispatchers.Main) { onResult(false) }
             }
         }
     }
@@ -580,13 +587,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val serverSnapshot = pinsRef.get(com.google.firebase.firestore.Source.SERVER).await()
+                val serverSnapshot = pinsRef.get(Source.SERVER).await()
                 val hidden = getHiddenPins()
                 serverSnapshot.toObjects(MeetupLocation::class.java).forEach { pin ->
                     if (!hidden.contains(pin.pinId)) locationDao.insertLocation(pin)
                 }
             } catch (_: Exception) {
-                android.util.Log.d("CloudSync", "Offline. Relying on local cache and Mesh Network.")
+                Log.d("CloudSync", "Offline. Relying on local cache and Mesh Network.")
             }
         }
 
@@ -667,13 +674,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     if (user != null) {
                         val emailParts = user.email.split("@")
                         val maskedEmail = if (emailParts.size == 2) "${emailParts[0].first()}***@${emailParts[1]}" else user.email
-                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, "Account found! Email: $maskedEmail") }
+                        withContext(Dispatchers.Main) { onResult(true, "Account found! Email: $maskedEmail") }
                         return@launch
                     }
                 }
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "No account found matching that info.") }
+                withContext(Dispatchers.Main) { onResult(false, "No account found matching that info.") }
             } catch (_: Exception) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, "Network error.") }
+                withContext(Dispatchers.Main) { onResult(false, "Network error.") }
             }
         }
     }
@@ -685,13 +692,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 firestore.collection("users").document(uid).delete().await()
                 user.delete().await()
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     logoutUser()
                     onComplete(true)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onComplete(false) }
+                withContext(Dispatchers.Main) { onComplete(false) }
             }
         }
     }
@@ -713,13 +720,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         loadFriendsList()
                         startListeningForInvites()
 
-                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false) }
+                        withContext(Dispatchers.Main) { onResult(true, false) }
                     } else {
-                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true) }
+                        withContext(Dispatchers.Main) { onResult(true, true) }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false) }
+                    withContext(Dispatchers.Main) { onResult(false, false) }
                 }
             }
         } else {
@@ -749,16 +756,16 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         loadFriendsList()
                         startListeningForInvites()
 
-                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, false, "Welcome back!") }
+                        withContext(Dispatchers.Main) { onResult(true, false, "Welcome back!") }
                     } else {
-                        kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, true, "Please complete your profile.") }
+                        withContext(Dispatchers.Main) { onResult(true, true, "Please complete your profile.") }
                     }
                 } else {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false, "Google Sign-In failed.") }
+                    withContext(Dispatchers.Main) { onResult(false, false, "Google Sign-In failed.") }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, false, e.message ?: "Network Error") }
+                withContext(Dispatchers.Main) { onResult(false, false, e.message ?: "Network Error") }
             }
         }
     }
@@ -793,9 +800,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 loadFriendsList()
                 startListeningForInvites()
 
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true, "Profile completed!") }
+                withContext(Dispatchers.Main) { onResult(true, "Profile completed!") }
             } catch (e: Exception) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false, e.message ?: "Error saving profile.") }
+                withContext(Dispatchers.Main) { onResult(false, e.message ?: "Error saving profile.") }
             }
         }
     }
@@ -830,9 +837,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     loadFriendsList()
                     startListeningForInvites()
 
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(true) }
-                } else { kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) } }
-            } catch (e: Exception) { e.printStackTrace(); kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(false) } }
+                    withContext(Dispatchers.Main) { onResult(true) }
+                } else {
+                    withContext(Dispatchers.Main) { onResult(false) }
+                }
+            } catch (e: Exception) { e.printStackTrace(); withContext(Dispatchers.Main) { onResult(false) }
+            }
         }
     }
 
@@ -853,9 +863,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     loadFriendsList()
                     startListeningForInvites()
 
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(fetchedUser) }
-                } else { kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(null) } }
-            } catch (e: Exception) { e.printStackTrace(); kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(null) } }
+                    withContext(Dispatchers.Main) { onResult(fetchedUser) }
+                } else {
+                    withContext(Dispatchers.Main) { onResult(null) }
+                }
+            } catch (e: Exception) { e.printStackTrace(); withContext(Dispatchers.Main) { onResult(null) }
+            }
         }
     }
 
