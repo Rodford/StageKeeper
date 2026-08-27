@@ -68,8 +68,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
 import coil.compose.AsyncImage
-import com.example.stagekeeper.data.PartyGroup
-import com.example.stagekeeper.data.User
+import com.example.stagekeeper.data.*
 import com.google.android.gms.location.LocationServices
 import com.mapbox.common.MapboxOptions
 import com.mapbox.common.TileRegionLoadOptions
@@ -104,6 +103,7 @@ import java.io.FileOutputStream
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.mapbox.maps.plugin.attribution.attribution
+import com.example.stagekeeper.ui.theme.StageKeeperTheme
 
 enum class AppScreen { Splash, Login, SignUp, GoogleSignUp, Setup, Map, Profile, Chat, Lineup, Locked }
 
@@ -10152,18 +10152,26 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         MapboxOptions.accessToken = BuildConfig.MAPBOX_TOKEN
 
-        val requiredPermissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        val requiredPermissions =
+            mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
             requiredPermissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
             requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
+
         requestPermissionsLauncher.launch(requiredPermissions.toTypedArray())
 
-        setContent { StageKeeperAppNavigation(mapViewModel) }
+        setContent {
+            StageKeeperTheme {
+                StageKeeperAppNavigation(mapViewModel)
+            }
+        }
     }
 
     override fun onUserInteraction() {
@@ -10172,8 +10180,13 @@ class MainActivity : FragmentActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    fun grabHardwareLocationAndSave(note: String, activeParty: String) {
-        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+    fun grabHardwareLocationAndSave(
+        note: String,
+        activeParty: String
+    ) {
+        val fusedLocationClient =
+            LocationServices.getFusedLocationProviderClient(this)
+
         fusedLocationClient.lastLocation.addOnSuccessListener { location ->
             if (location != null) {
                 mapViewModel.saveLocationToDatabase(
@@ -10182,9 +10195,18 @@ class MainActivity : FragmentActivity() {
                     note,
                     activeParty
                 )
-                Toast.makeText(this, "Pin Dropped!", Toast.LENGTH_SHORT).show()
+
+                Toast.makeText(
+                    this,
+                    "Pin Dropped!",
+                    Toast.LENGTH_SHORT
+                ).show()
             } else {
-                Toast.makeText(this, "Searching for GPS signal...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Searching for GPS signal...",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }

@@ -68,14 +68,14 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
 
-    implementation("com.google.android.gms:play-services-nearby:19.5.0")
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
-    implementation("androidx.security:security-crypto:1.1.0")
-    implementation("androidx.credentials:credentials:1.6.0")
-    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
-    implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.credentials:credentials:1.3.0-alpha01")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0-alpha01")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    implementation("com.google.android.gms:play-services-nearby:19.2.0")
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
@@ -83,13 +83,13 @@ dependencies {
 
     implementation(libs.mapbox.maps)
 
-    implementation("com.google.android.gms:play-services-location:21.4.0")
+    implementation("com.google.android.gms:play-services-location:21.1.0")
 
-    implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
+    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
 
-    implementation("com.google.code.gson:gson:2.14.0")
+    implementation("com.google.code.gson:gson:2.10.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -98,5 +98,5 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
 }
